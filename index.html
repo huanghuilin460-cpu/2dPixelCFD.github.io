@@ -179,41 +179,37 @@ const mctx = mainCanvas.getContext('2d', { alpha:false });
 mctx.imageSmoothingEnabled = false;
 fctx.imageSmoothingEnabled = false;
 
-let W = 0, H = 0; // css pixel size of stage
+let W = 0, H = 0;
 
-// simulation grid resolution (fixed width, height adapts to aspect ratio)
-const SIM_N = 150;      // columns
-let SIM_M = 96;         // rows (recomputed on resize)
+const SIM_N = 150;
+let SIM_M = 96;
 
 let paused = false;
 let currentTool = 'select';
-let objects = []; // {id, type:'wall'|'blower', x,y,w,h (fractions 0-1), angle}
+let objects = [];
 let nextId = 1;
 let selectedId = null;
 
-// interaction state
-let drag = null; // {mode:'new-wall'|'move'|'resize', id, startX,startY, orig...}
+let drag = null;
 let pointerDownInfo = null;
 let longPressTimer = null;
 
-// params
 let params = {
   force: 6.0,
-  diff: 0.0002,   // density diffusion
-  visc: 0.0,      // velocity diffusion (viscosity)
+  diff: 0.0002,
+  visc: 0.0,
 };
 
 /* =========================================================================
-   2. FLUID SOLVER  (Stable Fluids, Jos Stam / Mike Ash style port)
-   Rectangular grid N x M with 1-cell border. Obstacle-aware boundaries.
+   2. FLUID SOLVER
    ========================================================================= */
 let N = SIM_N, M = SIM_M;
 let size = (N+2)*(M+2);
 
-let u, v, u0, v0;       // velocity fields (current & previous)
-let dens, dens0;        // density (smoke) fields
-let curlField;          // for vorticity confinement
-let obstacle;           // Uint8Array 1=solid wall
+let u, v, u0, v0;
+let dens, dens0;
+let curlField;
+let obstacle;
 
 function IX(i,j){ return i + (N+2)*j; }
 
@@ -230,10 +226,7 @@ allocateFields();
 
 function clampi(x,lo,hi){ return x<lo?lo:(x>hi?hi:x); }
 
-// boundary condition. b=0 scalar, b=1 horizontal vel (flip x @ vertical walls), b=2 vertical vel
 function set_bnd(b, x){
-  // OPEN boundary: just copy the neighboring interior value (zero-gradient / outflow).
-  // Wind is free to flow out through the canvas edges instead of bouncing back inward.
   for (let i=1;i<=N;i++){
     x[IX(i,0)]   = x[IX(i,1)];
     x[IX(i,M+1)] = x[IX(i,M)];
@@ -247,9 +240,6 @@ function set_bnd(b, x){
   x[IX(N+1,0)]   = 0.5*(x[IX(N,0)]+x[IX(N+1,1)]);
   x[IX(N+1,M+1)] = 0.5*(x[IX(N,M+1)]+x[IX(N+1,M)]);
 
-  // Obstacles (walls): strictly solid. Velocity and density are forced to hard
-  // zero inside every obstacle cell -- no residual "leak" velocity at the
-  // surface, so the wall fully blocks flow with no gap between it and the air.
   for (let j=1;j<=M;j++){
     for (let i=1;i<=N;i++){
       if (!obstacle[IX(i,j)]) continue;
@@ -317,8 +307,6 @@ function project(velU, velV, p, div, iters){
   set_bnd(1, velU); set_bnd(2, velV);
 }
 
-// Vorticity confinement: restores small eddies lost to numerical diffusion,
-// producing the swirling wake / vortex shedding behind obstacles.
 function vorticityConfinement(dt){
   const eps = 4.2;
   for (let j=1;j<=M;j++){
@@ -344,7 +332,6 @@ function vorticityConfinement(dt){
 }
 
 function fluidStep(dt){
-  // velocity
   [u0,u]=[u,u0]; [v0,v]=[v,v0];
   if (params.visc>0){
     diffuse(1,u,u0,params.visc,dt,4);
@@ -353,17 +340,15 @@ function fluidStep(dt){
   }
   [u0,u]=[u,u0]; [v0,v]=[v,v0];
   advect(1,u,u0,u0,v0,dt);
-  advect(2,v,v0,u0,v0,dt); // note: use pre-advection field for both components
+  advect(2,v,v0,u0,v0,dt);
   project(u,v,u0,v0,14);
   vorticityConfinement(dt);
 
-  // density
   [dens0,dens]=[dens,dens0];
   if (params.diff>0) diffuse(0,dens,dens0,params.diff,dt,4);
   [dens0,dens]=[dens,dens0];
   advect(0,dens,dens0,u,v,dt);
 
-  // gentle global damping so the tunnel doesn't saturate / blow up
   for (let k=0;k<size;k++){
     dens[k] *= 0.999;
     u[k] *= 0.9995;
@@ -372,7 +357,7 @@ function fluidStep(dt){
 }
 
 /* =========================================================================
-   3. OBJECTS <-> FLUID GRID MAPPING (free placement, rasterized each frame)
+   3. OBJECTS <-> FLUID GRID MAPPING
    ========================================================================= */
 function rasterizeObstacles(){
   obstacle.fill(0);
@@ -393,9 +378,6 @@ function rasterizeObstacles(){
 function injectBlowers(dt){
   for (const o of objects){
     if (o.type !== 'blower') continue;
-    // Use the blower's true visual CENTER (matches drawBlowerSprite) --
-    // previously this used the top-left corner, which offset the injected
-    // wind stream away from where the blower is actually drawn.
     const cx = (o.x + o.w/2)*N + 1, cy = (o.y + o.h/2)*M + 1;
     const sizeCellsX = Math.max(2, Math.round(o.w*N));
     const sizeCellsY = Math.max(2, Math.round(o.h*M));
@@ -405,7 +387,6 @@ function injectBlowers(dt){
     if (o.angle===180) dirX=-1;
     if (o.angle===270) dirY=-1;
 
-    // mouth: a line of cells across the front face, spanning the blower's width
     const span = Math.max(2, Math.round((dirX!==0 ? sizeCellsY : sizeCellsX)/2));
     for (let s=-span; s<=span; s++){
       let gx, gy;
@@ -427,7 +408,7 @@ function injectBlowers(dt){
 }
 
 /* =========================================================================
-   4. STREAMLINE PARTICLES (optional overlay)
+   4. STREAMLINE PARTICLES
    ========================================================================= */
 const PARTICLE_COUNT = 260;
 let particles = [];
@@ -445,7 +426,7 @@ function sampleVel(gx,gy){
 }
 
 function stepParticles(dt){
-  const SPEED_SCALE = 1.6; // visual gain so streamlines read clearly at typical wind speeds
+  const SPEED_SCALE = 1.6;
   for (const p of particles){
     const [vu,vv] = sampleVel(p.x,p.y);
     p.x += vu*dt*N*SPEED_SCALE;
@@ -510,7 +491,6 @@ function renderFluidDensity(){
         data[dpix]=0; data[dpix+1]=0; data[dpix+2]=0; data[dpix+3]=0;
         continue;
       }
-      // color ramp: deep cyan-blue at rest -> bright white-hot at high speed
       const r = 20 + 60*d + 190*speed;
       const g = 110 + 90*d + 110*speed;
       const b = 210 + 45*d;
@@ -539,7 +519,7 @@ function fracToPx(o){
 
 function drawWallSprite(o){
   const r = fracToPx(o);
-  const px = 6; // brick pixel unit
+  const px = 6;
   mctx.save();
   mctx.beginPath(); mctx.rect(r.x,r.y,r.w,r.h); mctx.clip();
   mctx.fillStyle = '#6b7280';
@@ -563,7 +543,6 @@ function drawWallSprite(o){
     mctx.strokeStyle = getCSS('--accent');
     mctx.lineWidth = 2;
     mctx.strokeRect(r.x, r.y, r.w, r.h);
-    // resize handle
     mctx.fillStyle = getCSS('--accent');
     mctx.fillRect(r.x+r.w-7, r.y+r.h-7, 10, 10);
   }
@@ -576,17 +555,14 @@ function drawBlowerSprite(o){
   mctx.translate(cx,cy);
   mctx.rotate(o.angle*Math.PI/180);
   const w=r.w, h=r.h;
-  // pixel-block housing
   mctx.fillStyle = '#3d4a63';
   mctx.fillRect(-w/2,-h/2,w,h);
   mctx.fillStyle = '#4f5f80';
   mctx.fillRect(-w/2+3,-h/2+3,w-6,h-6);
-  // fan blades (simple pixel cross)
   mctx.fillStyle = getCSS('--accent-2');
   const bw = Math.max(2, w*0.08);
   mctx.fillRect(-bw/2, -h/2+6, bw, h-12);
   mctx.fillRect(-w/2+6, -bw/2, w-12, bw);
-  // direction arrow pointing +x (local), rotated by angle above
   mctx.fillStyle = '#fff';
   mctx.beginPath();
   mctx.moveTo(w/2-2, 0);
@@ -616,7 +592,6 @@ function render(){
   }
   if (showStreamlines) renderParticles();
 
-  // live preview of wall being drawn
   if (drag && drag.mode==='new-wall'){
     const x = Math.min(drag.curX,drag.startX), y = Math.min(drag.curY,drag.startY);
     const w = Math.abs(drag.curX-drag.startX), h = Math.abs(drag.curY-drag.startY);
@@ -731,7 +706,7 @@ const objCountLabel = document.getElementById('objCount');
 function updateStatus(){ objCountLabel.textContent = objects.length; }
 
 /* =========================================================================
-   8. POINTER INTERACTION  (mouse + touch unified via Pointer Events)
+   8. POINTER INTERACTION
    ========================================================================= */
 function toFrac(evt){
   const rect = mainCanvas.getBoundingClientRect();
@@ -739,7 +714,6 @@ function toFrac(evt){
 }
 
 function hitTest(fx,fy){
-  // topmost object under point (iterate reverse for z-order)
   for (let k=objects.length-1;k>=0;k--){
     const o = objects[k];
     if (fx>=o.x && fx<=o.x+o.w && fy>=o.y && fy<=o.y+o.h) return o;
@@ -776,7 +750,6 @@ mainCanvas.addEventListener('pointerdown', (e)=>{
     if (hit){ objects = objects.filter(o=>o.id!==hit.id); updateStatus(); }
     return;
   }
-  // select tool
   const hit = hitTest(fx,fy);
   if (hit && hitResizeHandle(fx,fy,hit)){
     drag = { mode:'resize', id:hit.id, startX:fx, startY:fy, origW:hit.w, origH:hit.h };
@@ -786,8 +759,6 @@ mainCanvas.addEventListener('pointerdown', (e)=>{
   if (hit){
     selectedId = hit.id;
     drag = { mode:'move', id:hit.id, startX:fx, startY:fy, origX:hit.x, origY:hit.y };
-    if (hit.type==='touch'){}
-    // long-press to delete on touch
     if (e.pointerType==='touch'){
       longPressTimer = setTimeout(()=>{
         objects = objects.filter(o=>o.id!==hit.id);
@@ -840,7 +811,6 @@ mainCanvas.addEventListener('pointerup', (e)=>{
     objects.push(o); selectedId=o.id; updateStatus();
   }
 
-  // click (no movement) on a blower while in select tool => rotate
   if (pointerDownInfo && !pointerDownInfo.moved && drag && drag.mode==='move'){
     const o = objects.find(o=>o.id===drag.id);
     if (o && o.type==='blower'){
@@ -869,7 +839,6 @@ mainCanvas.addEventListener('contextmenu', (e)=>{
 window.addEventListener('resize', ()=>{ resizeCanvases(); });
 resizeCanvases();
 
-// seed a small default scene so first-time visitors immediately see the effect
 (function seedScene(){
   objects.push({ id:nextId++, type:'blower', x:0.06, y:0.44, w:0.07, h:0.07, angle:0 });
   objects.push({ id:nextId++, type:'wall', x:0.45, y:0.32, w:0.05, h:0.36 });
