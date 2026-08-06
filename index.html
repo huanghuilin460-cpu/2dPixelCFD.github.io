@@ -102,6 +102,11 @@
       padding: 6px 8px; border: 1px solid rgba(0,0,0,0.15); max-width: 260px; line-height: 1.5;
       pointer-events: none;
     }
+    #errorLog {
+      position: absolute; top: 10px; right: 10px; z-index: 10;
+      background: rgba(255,0,0,0.8); color: white; padding: 8px; font-size: 12px;
+      display: none; max-width: 300px; word-wrap: break-word;
+    }
   </style>
 </head>
 <body>
@@ -109,7 +114,6 @@
   <div id="toolbar">
     <div class="title">▓ 像素风洞 WIND&nbsp;TUNNEL</div>
     <div class="sep"></div>
-
     <div class="tool-group">
       <button class="tool" data-tool="select" title="选择/移动/旋转">
         <canvas width="16" height="16" data-icon="select"></canvas>
@@ -128,11 +132,9 @@
         <span class="lbl">删除</span>
       </button>
     </div>
-
     <div class="sep"></div>
     <button id="clearBtn" title="清空画布">清空 CLEAR</button>
     <button id="playPause" title="暂停/继续模拟">⏸</button>
-
     <div class="sep"></div>
     <div class="ctrl">
       <span>风力 FORCE <span class="val" id="forceVal">6.0</span></span>
@@ -149,14 +151,13 @@
     <div class="chk">
       <label><input type="checkbox" id="streamToggle"> 流线粒子<br>STREAMLINES</label>
     </div>
-
     <div id="status">工具: <b id="toolName">选择</b> · 物体: <b id="objCount">0</b></div>
   </div>
-
   <div id="stage">
     <canvas id="fluidCanvas"></canvas>
     <canvas id="mainCanvas"></canvas>
     <div id="hint">拖拽放置墙体和鼓风机，位置完全自由（非网格吸附）。选中物体后拖右下角蓝色小方块可缩放大小；点击鼓风机机身可切换朝向。右键/长按物体可删除。</div>
+    <div id="errorLog"></div>
   </div>
 </div>
 
@@ -164,9 +165,16 @@
 (function(){
   "use strict";
 
-  /* =========================================================================
-     1. GLOBAL STATE
-     ========================================================================= */
+  // 捕获运行时错误并显示在界面上，便于调试
+  window.onerror = function(msg, url, line, col, error) {
+    const log = document.getElementById('errorLog');
+    if (log) {
+      log.style.display = 'block';
+      log.textContent = '脚本错误: ' + msg + ' (行 ' + line + ')';
+    }
+    return false;
+  };
+
   const stage = document.getElementById('stage');
   const fluidCanvas = document.getElementById('fluidCanvas');
   const mainCanvas = document.getElementById('mainCanvas');
@@ -176,37 +184,28 @@
   fctx.imageSmoothingEnabled = false;
 
   let W = 0, H = 0;
-
-  // Increased resolution for finer pixels
   const SIM_N = 240;
   let SIM_M = 160;
-
   let paused = false;
   let currentTool = 'select';
   let objects = [];
   let nextId = 1;
   let selectedId = null;
-
   let drag = null;
   let pointerDownInfo = null;
   let longPressTimer = null;
+  let showStreamlines = false;   // 提前声明，避免提升问题
 
   let params = {
     force: 6.0,
     diff: 0.0002,
-    visc: 0.0,
+    visc: 0.0
   };
 
-  /* =========================================================================
-     2. FLUID SOLVER (Stable Fluids)
-     ========================================================================= */
+  /* 流体求解器 */
   let N = SIM_N, M = SIM_M;
   let size = (N+2)*(M+2);
-
-  let u, v, u0, v0;
-  let dens, dens0;
-  let curlField;
-  let obstacle;
+  let u, v, u0, v0, dens, dens0, curlField, obstacle;
 
   function IX(i,j) { return i + (N+2)*j; }
 
@@ -236,11 +235,9 @@
     x[IX(0, M+1)]     = 0.5 * (x[IX(1, M+1)] + x[IX(0, M)]);
     x[IX(N+1, 0)]     = 0.5 * (x[IX(N, 0)] + x[IX(N+1, 1)]);
     x[IX(N+1, M+1)]   = 0.5 * (x[IX(N, M+1)] + x[IX(N+1, M)]);
-
     for (let j = 1; j <= M; j++) {
       for (let i = 1; i <= N; i++) {
-        if (!obstacle[IX(i, j)]) continue;
-        x[IX(i, j)] = 0;
+        if (obstacle[IX(i, j)]) x[IX(i, j)] = 0;
       }
     }
   }
@@ -270,11 +267,12 @@
         if (obstacle[IX(i, j)]) { d[IX(i, j)] = 0; continue; }
         let x = i - dt0N * velU[IX(i, j)];
         let y = j - dt0M * velV[IX(i, j)];
-        if (x < 0.5) x = 0.5; if (x > N+0.5) x = N+0.5;
-        if (y < 0.5) y = 0.5; if (y > M+0.5) y = M+0.5;
+        x = clampi(x, 0.5, N+0.5);
+        y = clampi(y, 0.5, M+0.5);
         const i0 = Math.floor(x), i1 = i0 + 1;
         const j0 = Math.floor(y), j1 = j0 + 1;
-        const s1 = x - i0, s0 = 1 - s1, t1 = y - j0, t0 = 1 - t1;
+        const s1 = x - i0, s0 = 1 - s1;
+        const t1 = y - j0, t0 = 1 - t1;
         d[IX(i, j)] = s0 * (t0 * d0[IX(i0, j0)] + t1 * d0[IX(i0, j1)]) +
                        s1 * (t0 * d0[IX(i1, j0)] + t1 * d0[IX(i1, j1)]);
       }
@@ -293,7 +291,6 @@
     }
     set_bnd(0, div); set_bnd(0, p);
     lin_solve(0, p, div, 1, 4, iters);
-
     for (let j = 1; j <= M; j++) {
       for (let i = 1; i <= N; i++) {
         if (obstacle[IX(i, j)]) continue;
@@ -316,12 +313,11 @@
     for (let j = 2; j < M; j++) {
       for (let i = 2; i < N; i++) {
         if (obstacle[IX(i, j)]) continue;
-        const c = curlField;
-        let nx = (Math.abs(c[IX(i+1, j)]) - Math.abs(c[IX(i-1, j)])) * 0.5;
-        let ny = (Math.abs(c[IX(i, j+1)]) - Math.abs(c[IX(i, j-1)])) * 0.5;
+        let nx = (Math.abs(curlField[IX(i+1, j)]) - Math.abs(curlField[IX(i-1, j)])) * 0.5;
+        let ny = (Math.abs(curlField[IX(i, j+1)]) - Math.abs(curlField[IX(i, j-1)])) * 0.5;
         const len = Math.sqrt(nx*nx + ny*ny) + 1e-5;
         nx /= len; ny /= len;
-        const curl = c[IX(i, j)];
+        const curl = curlField[IX(i, j)];
         u[IX(i, j)] += eps * dt * ( ny * curl);
         v[IX(i, j)] += eps * dt * (-nx * curl);
       }
@@ -353,14 +349,11 @@
     }
   }
 
-  /* =========================================================================
-     3. OBJECTS <-> FLUID GRID MAPPING (improved gap prevention)
-     ========================================================================= */
+  /* 物体栅格化与风力注入 */
   function rasterizeObstacles() {
     obstacle.fill(0);
     for (const o of objects) {
       if (o.type !== 'wall') continue;
-      // Expand coverage by half a cell to close gaps
       const gx0 = clampi(Math.floor(o.x * N) + 1, 1, N);
       const gy0 = clampi(Math.floor(o.y * M) + 1, 1, M);
       const gx1 = clampi(Math.ceil((o.x + o.w) * N) + 1, 1, N);
@@ -386,10 +379,8 @@
       if (o.angle === 180) dirX = -1;
       if (o.angle === 270) dirY = -1;
 
-      // Span now covers the entire width of the blower face, making scaling intuitive.
-      // For horizontal wind, the face height is sizeCellsY; for vertical wind, it's sizeCellsX.
       const span = Math.max(2, Math.round((dirX !== 0 ? sizeCellsY : sizeCellsX)));
-      const forceFactor = 0.5; // compensate for doubling the span compared to previous half-width
+      const forceFactor = 0.5;
       const densityFactor = 0.5;
 
       for (let s = 0; s < span; s++) {
@@ -412,9 +403,7 @@
     }
   }
 
-  /* =========================================================================
-     4. STREAMLINE PARTICLES
-     ========================================================================= */
+  /* 流线粒子 */
   const PARTICLE_COUNT = 300;
   let particles = [];
   function initParticles() {
@@ -442,8 +431,7 @@
       p.y += vv * dt * M * SPEED_SCALE;
       p.life -= 1;
       const gi = clampi(Math.floor(p.x), 1, N), gj = clampi(Math.floor(p.y), 1, M);
-      const solid = obstacle[IX(gi, gj)];
-      if (p.life <= 0 || p.x < 1 || p.x > N || p.y < 1 || p.y > M || solid) {
+      if (p.life <= 0 || p.x < 1 || p.x > N || p.y < 1 || p.y > M || obstacle[IX(gi, gj)]) {
         p.x = 1 + Math.random() * 3;
         p.y = 1 + Math.random() * (M - 2);
         p.life = 90 + Math.random() * 90;
@@ -451,9 +439,7 @@
     }
   }
 
-  /* =========================================================================
-     5. RENDERING
-     ========================================================================= */
+  /* 渲染 */
   let fluidImgData = null;
 
   function resizeCanvases() {
@@ -476,19 +462,15 @@
   }
 
   function drawGridBackground() {
-    mctx.fillStyle = getCSS('--paper');
+    mctx.fillStyle = '#dfe3ea';
     mctx.fillRect(0, 0, W, H);
     const cell = 18;
-    mctx.strokeStyle = getCSS('--paper-grid');
+    mctx.strokeStyle = '#c9cfdb';
     mctx.lineWidth = 1;
     mctx.beginPath();
     for (let x = 0; x <= W; x += cell) { mctx.moveTo(x+0.5, 0); mctx.lineTo(x+0.5, H); }
     for (let y = 0; y <= H; y += cell) { mctx.moveTo(0, y+0.5); mctx.lineTo(W, y+0.5); }
     mctx.stroke();
-  }
-
-  function getCSS(varName) {
-    return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
   }
 
   function renderFluidDensity() {
@@ -497,12 +479,12 @@
       for (let i = 1; i <= N; i++) {
         const idx = IX(i, j);
         const dpix = ((j-1) * N + (i-1)) * 4;
-        const d = Math.min(1, dens[idx]);
-        const speed = Math.min(1, Math.hypot(u[idx], v[idx]) * 3);
         if (obstacle[idx]) {
           data[dpix] = 0; data[dpix+1] = 0; data[dpix+2] = 0; data[dpix+3] = 0;
           continue;
         }
+        const d = Math.min(1, dens[idx]);
+        const speed = Math.min(1, Math.hypot(u[idx], v[idx]) * 3);
         const r = 20 + 60 * d + 190 * speed;
         const g = 110 + 90 * d + 110 * speed;
         const b = 210 + 45 * d;
@@ -525,9 +507,7 @@
     }
   }
 
-  function fracToPx(o) {
-    return { x: o.x * W, y: o.y * H, w: o.w * W, h: o.h * H };
-  }
+  function fracToPx(o) { return { x: o.x * W, y: o.y * H, w: o.w * W, h: o.h * H }; }
 
   function drawWallSprite(o) {
     const r = fracToPx(o);
@@ -536,8 +516,6 @@
     mctx.beginPath(); mctx.rect(r.x, r.y, r.w, r.h); mctx.clip();
     mctx.fillStyle = '#6b7280';
     mctx.fillRect(r.x, r.y, r.w, r.h);
-    mctx.strokeStyle = 'rgba(0,0,0,0.35)';
-    mctx.lineWidth = 1;
     let rowIdx = 0;
     for (let yy = r.y; yy < r.y + r.h; yy += px * 2) {
       const offset = (rowIdx % 2 === 0) ? 0 : px;
@@ -550,12 +528,11 @@
     mctx.strokeStyle = 'rgba(0,0,0,0.45)';
     mctx.strokeRect(r.x+1, r.y+1, r.w-2, r.h-2);
     mctx.restore();
-
     if (o.id === selectedId) {
-      mctx.strokeStyle = getCSS('--accent');
+      mctx.strokeStyle = '#5ad1d6';
       mctx.lineWidth = 2;
       mctx.strokeRect(r.x, r.y, r.w, r.h);
-      mctx.fillStyle = getCSS('--accent');
+      mctx.fillStyle = '#5ad1d6';
       mctx.fillRect(r.x + r.w - 7, r.y + r.h - 7, 10, 10);
     }
   }
@@ -566,32 +543,27 @@
     mctx.save();
     mctx.translate(cx, cy);
     mctx.rotate(o.angle * Math.PI / 180);
-    const w = r.w, h = r.h;
-    // Housing
     mctx.fillStyle = '#3d4a63';
-    mctx.fillRect(-w/2, -h/2, w, h);
+    mctx.fillRect(-r.w/2, -r.h/2, r.w, r.h);
     mctx.fillStyle = '#4f5f80';
-    mctx.fillRect(-w/2+3, -h/2+3, w-6, h-6);
-    // Fan blades
-    mctx.fillStyle = getCSS('--accent-2');
-    const bw = Math.max(2, w * 0.08);
-    mctx.fillRect(-bw/2, -h/2+6, bw, h-12);
-    mctx.fillRect(-w/2+6, -bw/2, w-12, bw);
-    // Direction arrow
+    mctx.fillRect(-r.w/2+3, -r.h/2+3, r.w-6, r.h-6);
+    mctx.fillStyle = '#f2a65a';
+    const bw = Math.max(2, r.w * 0.08);
+    mctx.fillRect(-bw/2, -r.h/2+6, bw, r.h-12);
+    mctx.fillRect(-r.w/2+6, -bw/2, r.w-12, bw);
     mctx.fillStyle = '#fff';
     mctx.beginPath();
-    mctx.moveTo(w/2-2, 0);
-    mctx.lineTo(w/2-10, -7);
-    mctx.lineTo(w/2-10, 7);
+    mctx.moveTo(r.w/2-2, 0);
+    mctx.lineTo(r.w/2-10, -7);
+    mctx.lineTo(r.w/2-10, 7);
     mctx.closePath();
     mctx.fill();
     mctx.restore();
-
     if (o.id === selectedId) {
-      mctx.strokeStyle = getCSS('--accent');
+      mctx.strokeStyle = '#5ad1d6';
       mctx.lineWidth = 2;
       mctx.strokeRect(r.x-2, r.y-2, r.w+4, r.h+4);
-      mctx.fillStyle = getCSS('--accent');
+      mctx.fillStyle = '#5ad1d6';
       mctx.fillRect(r.x + r.w - 6, r.y + r.h - 6, 10, 10);
     }
   }
@@ -606,11 +578,10 @@
       if (o.type === 'blower') drawBlowerSprite(o);
     }
     if (showStreamlines) renderParticles();
-
     if (drag && drag.mode === 'new-wall') {
       const x = Math.min(drag.curX, drag.startX), y = Math.min(drag.curY, drag.startY);
       const w = Math.abs(drag.curX - drag.startX), h = Math.abs(drag.curY - drag.startY);
-      mctx.strokeStyle = getCSS('--accent-2');
+      mctx.strokeStyle = '#f2a65a';
       mctx.setLineDash([5,4]);
       mctx.lineWidth = 2;
       mctx.strokeRect(x * W, y * H, w * W, h * H);
@@ -618,28 +589,30 @@
     }
   }
 
-  let showStreamlines = false;
-
-  /* =========================================================================
-     6. MAIN LOOP
-     ========================================================================= */
+  /* 主循环 */
   let lastT = performance.now();
   function loop(t) {
-    const dt = Math.min(0.033, (t - lastT) / 1000) || 0.016;
-    lastT = t;
-    if (!paused) {
-      rasterizeObstacles();
-      injectBlowers(dt);
-      fluidStep(0.12);
-      if (showStreamlines) stepParticles(0.12);
+    try {
+      const dt = Math.min(0.033, (t - lastT) / 1000) || 0.016;
+      lastT = t;
+      if (!paused) {
+        rasterizeObstacles();
+        injectBlowers(dt);
+        fluidStep(0.12);
+        if (showStreamlines) stepParticles(0.12);
+      }
+      render();
+    } catch (e) {
+      const log = document.getElementById('errorLog');
+      if (log) {
+        log.style.display = 'block';
+        log.textContent = '运行时错误: ' + e.message;
+      }
     }
-    render();
     requestAnimationFrame(loop);
   }
 
-  /* =========================================================================
-     7. UI & ICONS
-     ========================================================================= */
+  /* UI 图标绘制 */
   function drawIcon(canvas, kind) {
     const ctx = canvas.getContext('2d');
     ctx.imageSmoothingEnabled = false;
@@ -670,12 +643,11 @@
 
   const toolButtons = document.querySelectorAll('button.tool');
   const toolNameLabel = document.getElementById('toolName');
-  const toolLabels = { select:'选择', wall:'墙体', blower:'鼓风机', delete:'删除' };
   function setTool(t) {
     currentTool = t;
     selectedId = null;
     toolButtons.forEach(b => b.classList.toggle('active', b.dataset.tool === t));
-    toolNameLabel.textContent = toolLabels[t];
+    toolNameLabel.textContent = { select:'选择', wall:'墙体', blower:'鼓风机', delete:'删除' }[t];
   }
   toolButtons.forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
   setTool('select');
@@ -690,37 +662,26 @@
     playPauseBtn.textContent = paused ? '▶' : '⏸';
   });
 
-  const forceSlider = document.getElementById('forceSlider');
-  const forceVal = document.getElementById('forceVal');
-  forceSlider.addEventListener('input', () => {
-    params.force = parseFloat(forceSlider.value);
-    forceVal.textContent = params.force.toFixed(1);
+  document.getElementById('forceSlider').addEventListener('input', e => {
+    params.force = parseFloat(e.target.value);
+    document.getElementById('forceVal').textContent = params.force.toFixed(1);
   });
-
-  const diffSlider = document.getElementById('diffSlider');
-  const diffVal = document.getElementById('diffVal');
-  diffSlider.addEventListener('input', () => {
-    params.diff = parseFloat(diffSlider.value) * 0.0001;
-    diffVal.textContent = params.diff.toFixed(4);
+  document.getElementById('diffSlider').addEventListener('input', e => {
+    params.diff = parseFloat(e.target.value) * 0.0001;
+    document.getElementById('diffVal').textContent = params.diff.toFixed(4);
   });
-
-  const viscSlider = document.getElementById('viscSlider');
-  const viscVal = document.getElementById('viscVal');
-  viscSlider.addEventListener('input', () => {
-    params.visc = parseFloat(viscSlider.value) * 0.0001;
-    viscVal.textContent = params.visc.toFixed(4);
+  document.getElementById('viscSlider').addEventListener('input', e => {
+    params.visc = parseFloat(e.target.value) * 0.0001;
+    document.getElementById('viscVal').textContent = params.visc.toFixed(4);
   });
-
-  document.getElementById('streamToggle').addEventListener('change', (e) => {
+  document.getElementById('streamToggle').addEventListener('change', e => {
     showStreamlines = e.target.checked;
   });
 
   const objCountLabel = document.getElementById('objCount');
   function updateStatus() { objCountLabel.textContent = objects.length; }
 
-  /* =========================================================================
-     8. POINTER INTERACTION (touch + mouse)
-     ========================================================================= */
+  /* 交互处理 */
   function toFrac(evt) {
     const rect = mainCanvas.getBoundingClientRect();
     return { x: (evt.clientX - rect.left) / W, y: (evt.clientY - rect.top) / H };
@@ -737,14 +698,13 @@
   function hitResizeHandle(fx, fy, o) {
     if (!o || (o.type !== 'wall' && o.type !== 'blower')) return false;
     const hx = (o.x + o.w) * W, hy = (o.y + o.h) * H;
-    const px = fx * W, py = fy * H;
-    return Math.abs(px - hx) < 10 && Math.abs(py - hy) < 10;
+    return Math.abs(fx * W - hx) < 10 && Math.abs(fy * H - hy) < 10;
   }
 
   const DEFAULT_WALL_W = 0.03, DEFAULT_WALL_H = 0.16;
   const DEFAULT_BLOWER_W = 0.07, DEFAULT_BLOWER_H = 0.07;
 
-  mainCanvas.addEventListener('pointerdown', (e) => {
+  mainCanvas.addEventListener('pointerdown', e => {
     mainCanvas.setPointerCapture(e.pointerId);
     const { x: fx, y: fy } = toFrac(e);
     pointerDownInfo = { fx, fy, time: performance.now(), moved: false };
@@ -754,17 +714,21 @@
       return;
     }
     if (currentTool === 'blower') {
-      const o = {
+      objects.push({
         id: nextId++, type: 'blower',
         x: fx - DEFAULT_BLOWER_W/2, y: fy - DEFAULT_BLOWER_H/2,
         w: DEFAULT_BLOWER_W, h: DEFAULT_BLOWER_H, angle: 0
-      };
-      objects.push(o); selectedId = o.id; updateStatus();
+      });
+      selectedId = nextId - 1;
+      updateStatus();
       return;
     }
     if (currentTool === 'delete') {
       const hit = hitTest(fx, fy);
-      if (hit) { objects = objects.filter(o => o.id !== hit.id); updateStatus(); }
+      if (hit) {
+        objects = objects.filter(o => o.id !== hit.id);
+        updateStatus();
+      }
       return;
     }
     const hit = hitTest(fx, fy);
@@ -787,11 +751,10 @@
     }
   });
 
-  mainCanvas.addEventListener('pointermove', (e) => {
+  mainCanvas.addEventListener('pointermove', e => {
     const { x: fx, y: fy } = toFrac(e);
     if (pointerDownInfo) {
-      const dx = fx - pointerDownInfo.fx, dy = fy - pointerDownInfo.fy;
-      if (Math.hypot(dx, dy) > 0.004) pointerDownInfo.moved = true;
+      if (Math.hypot(fx - pointerDownInfo.fx, fy - pointerDownInfo.fy) > 0.004) pointerDownInfo.moved = true;
     }
     if (longPressTimer && pointerDownInfo && pointerDownInfo.moved) {
       clearTimeout(longPressTimer); longPressTimer = null;
@@ -816,25 +779,21 @@
     }
   });
 
-  mainCanvas.addEventListener('pointerup', (e) => {
+  mainCanvas.addEventListener('pointerup', e => {
     if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
     const { x: fx, y: fy } = toFrac(e);
-
     if (drag && drag.mode === 'new-wall') {
       const x = Math.min(drag.curX, drag.startX), y = Math.min(drag.curY, drag.startY);
       let w = Math.abs(drag.curX - drag.startX), h = Math.abs(drag.curY - drag.startY);
       if (w < 0.015 && h < 0.015) { w = DEFAULT_WALL_W; h = DEFAULT_WALL_H; }
-      const o = { id: nextId++, type: 'wall', x: clampi(x, 0, 1-w), y: clampi(y, 0, 1-h), w, h };
-      objects.push(o); selectedId = o.id; updateStatus();
+      objects.push({ id: nextId++, type: 'wall', x: clampi(x, 0, 1-w), y: clampi(y, 0, 1-h), w, h });
+      selectedId = nextId - 1;
+      updateStatus();
     }
-
     if (pointerDownInfo && !pointerDownInfo.moved && drag && drag.mode === 'move') {
       const o = objects.find(o => o.id === drag.id);
-      if (o && o.type === 'blower') {
-        o.angle = (o.angle + 90) % 360;
-      }
+      if (o && o.type === 'blower') o.angle = (o.angle + 90) % 360;
     }
-
     drag = null; pointerDownInfo = null;
   });
 
@@ -843,24 +802,24 @@
     if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
   });
 
-  mainCanvas.addEventListener('contextmenu', (e) => {
+  mainCanvas.addEventListener('contextmenu', e => {
     e.preventDefault();
     const { x: fx, y: fy } = toFrac(e);
     const hit = hitTest(fx, fy);
-    if (hit) { objects = objects.filter(o => o.id !== hit.id); selectedId = null; updateStatus(); }
+    if (hit) {
+      objects = objects.filter(o => o.id !== hit.id);
+      selectedId = null;
+      updateStatus();
+    }
   });
 
-  /* =========================================================================
-     9. INIT & SEED
-     ========================================================================= */
-  window.addEventListener('resize', () => { resizeCanvases(); });
+  window.addEventListener('resize', resizeCanvases);
   resizeCanvases();
 
-  (function seedScene() {
-    objects.push({ id: nextId++, type: 'blower', x: 0.06, y: 0.44, w: 0.07, h: 0.07, angle: 0 });
-    objects.push({ id: nextId++, type: 'wall', x: 0.45, y: 0.32, w: 0.05, h: 0.36 });
-    updateStatus();
-  })();
+  // 初始场景
+  objects.push({ id: nextId++, type: 'blower', x: 0.06, y: 0.44, w: 0.07, h: 0.07, angle: 0 });
+  objects.push({ id: nextId++, type: 'wall', x: 0.45, y: 0.32, w: 0.05, h: 0.36 });
+  updateStatus();
 
   requestAnimationFrame(loop);
 })();
