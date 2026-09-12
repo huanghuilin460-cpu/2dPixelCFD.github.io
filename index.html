@@ -380,7 +380,7 @@
     }
   }
 
-  /* ===== 障碍物栅格化：支持矩形、三角形、圆形 ===== */
+  /* ===== 障碍物栅格化：与渲染严格对齐 ===== */
   function rasterizeObstacles() {
     obstacle.fill(0);
     for (const o of objects) {
@@ -388,7 +388,6 @@
       const shape = o.shape || 'rect';
 
       if (shape === 'rect') {
-        // 矩形：边界向内收缩，消除间隙
         const gx0 = clampi(Math.ceil(o.x * N) + 1, 1, N);
         const gy0 = clampi(Math.ceil(o.y * M) + 1, 1, M);
         const gx1 = clampi(Math.floor((o.x + o.w) * N), 1, N);
@@ -400,7 +399,6 @@
           }
         }
       } else if (shape === 'circle') {
-        // 圆形/椭圆
         const cx = (o.x + o.w/2) * N + 1;
         const cy = (o.y + o.h/2) * M + 1;
         const rx = Math.max(0.5, (o.w/2) * N);
@@ -410,16 +408,20 @@
         const gx1 = clampi(Math.ceil((o.x + o.w) * N), 1, N);
         const gy1 = clampi(Math.ceil((o.y + o.h) * M), 1, M);
         for (let j = gy0; j <= gy1; j++) {
-          for (let i = gx0; i <= gx1; i++) {
-            const dx = (i - cx) / rx;
-            const dy = (j - cy) / ry;
-            if (dx*dx + dy*dy <= 1) {
-              obstacle[IX(i, j)] = 1;
-            }
+          const dy = (j - cy) / ry;
+          const dy2 = dy * dy;
+          if (dy2 > 1) continue;
+          const dxMax = Math.sqrt(1 - dy2);
+          const rowLeft = Math.ceil(cx - dxMax * rx);
+          const rowRight = Math.floor(cx + dxMax * rx);
+          const clampedLeft = clampi(rowLeft, gx0, gx1);
+          const clampedRight = clampi(rowRight, gx0, gx1);
+          if (clampedLeft > clampedRight) continue;
+          for (let i = clampedLeft; i <= clampedRight; i++) {
+            obstacle[IX(i, j)] = 1;
           }
         }
       } else if (shape === 'triangle') {
-        // 等腰三角形：顶点在上，底边在下
         const left = o.x * N + 1;
         const right = (o.x + o.w) * N + 1;
         const top = o.y * M + 1;
@@ -433,12 +435,13 @@
         for (let j = gy0; j <= gy1; j++) {
           const t = clampi((j - top) / height, 0, 1);
           const halfW = t * (right - left) / 2;
-          const rowLeft = cx - halfW;
-          const rowRight = cx + halfW;
-          for (let i = gx0; i <= gx1; i++) {
-            if (i >= rowLeft && i <= rowRight) {
-              obstacle[IX(i, j)] = 1;
-            }
+          const rowLeft = Math.ceil(cx - halfW);
+          const rowRight = Math.floor(cx + halfW);
+          const clampedLeft = clampi(rowLeft, gx0, gx1);
+          const clampedRight = clampi(rowRight, gx0, gx1);
+          if (clampedLeft > clampedRight) continue;
+          for (let i = clampedLeft; i <= clampedRight; i++) {
+            obstacle[IX(i, j)] = 1;
           }
         }
       }
@@ -528,12 +531,10 @@
     const pctx = patCanvas.getContext('2d');
     disableSmoothing(pctx);
 
-    // 第一层
     pctx.fillStyle = '#7c8494';
     pctx.fillRect(0, 0, px*2, px);
     pctx.fillStyle = '#5c6373';
     pctx.fillRect(px, 0, px, px-1);
-    // 第二层错位
     pctx.fillStyle = '#5c6373';
     pctx.fillRect(0, px, px*2, px);
     pctx.fillStyle = '#7c8494';
@@ -577,7 +578,6 @@
     disableSmoothing(fctx);
     fluidImgData = fctx.createImageData(N, M);
 
-    // 重建缓存
     renderGridToCache();
     buildBrickPattern();
   }
@@ -622,59 +622,99 @@
 
   function fracToPx(o) { return { x: o.x * W, y: o.y * H, w: o.w * W, h: o.h * H }; }
 
-  /* ===== 墙体渲染：支持三种形状 ===== */
+  /* ===== 像素化墙体渲染：与流体栅格严格对齐 ===== */
   function drawWallSprite(o) {
     const r = fracToPx(o);
     const shape = o.shape || 'rect';
+    const cellW = W / N;
+    const cellH = H / M;
 
-    // 裁剪 + 填充砖块
-    mctx.save();
-    mctx.beginPath();
     if (shape === 'rect') {
-      mctx.rect(r.x, r.y, r.w, r.h);
-    } else if (shape === 'circle') {
-      const cx = r.x + r.w/2;
-      const cy = r.y + r.h/2;
-      mctx.ellipse(cx, cy, r.w/2, r.h/2, 0, 0, Math.PI*2);
-    } else if (shape === 'triangle') {
-      const cx = r.x + r.w/2;
-      mctx.moveTo(cx, r.y);
-      mctx.lineTo(r.x + r.w, r.y + r.h);
-      mctx.lineTo(r.x, r.y + r.h);
-      mctx.closePath();
-    }
-    mctx.clip();
-
-    // 底色
-    mctx.fillStyle = '#6b7280';
-    mctx.fillRect(r.x, r.y, r.w, r.h);
-    // 砖块图案
-    if (brickPattern) {
-      mctx.fillStyle = brickPattern;
+      // 矩形墙体
+      mctx.fillStyle = '#6b7280';
       mctx.fillRect(r.x, r.y, r.w, r.h);
-    }
-    mctx.restore();
-
-    // 内描边
-    mctx.save();
-    mctx.beginPath();
-    if (shape === 'rect') {
-      mctx.rect(r.x+1, r.y+1, r.w-2, r.h-2);
+      if (brickPattern) {
+        mctx.save();
+        mctx.beginPath();
+        mctx.rect(r.x, r.y, r.w, r.h);
+        mctx.clip();
+        mctx.fillStyle = brickPattern;
+        mctx.fillRect(r.x, r.y, r.w, r.h);
+        mctx.restore();
+      }
+      // 内描边
+      mctx.strokeStyle = 'rgba(0,0,0,0.45)';
+      mctx.lineWidth = 1;
+      mctx.strokeRect(r.x+1, r.y+1, r.w-2, r.h-2);
     } else if (shape === 'circle') {
-      const cx = r.x + r.w/2;
-      const cy = r.y + r.h/2;
-      mctx.ellipse(cx, cy, r.w/2 - 1, r.h/2 - 1, 0, 0, Math.PI*2);
+      // 像素化椭圆：逐行填充，与障碍物栅格完全对齐
+      const cx = (o.x + o.w/2) * N + 1;
+      const cy = (o.y + o.h/2) * M + 1;
+      const rx = Math.max(0.5, (o.w/2) * N);
+      const ry = Math.max(0.5, (o.h/2) * M);
+      const gx0 = clampi(Math.floor(o.x * N) + 1, 1, N);
+      const gy0 = clampi(Math.floor(o.y * M) + 1, 1, M);
+      const gx1 = clampi(Math.ceil((o.x + o.w) * N), 1, N);
+      const gy1 = clampi(Math.ceil((o.y + o.h) * M), 1, M);
+
+      for (let j = gy0; j <= gy1; j++) {
+        const dy = (j - cy) / ry;
+        const dy2 = dy * dy;
+        if (dy2 > 1) continue;
+        const dxMax = Math.sqrt(1 - dy2);
+        const rowLeft = Math.ceil(cx - dxMax * rx);
+        const rowRight = Math.floor(cx + dxMax * rx);
+        const clampedLeft = clampi(rowLeft, gx0, gx1);
+        const clampedRight = clampi(rowRight, gx0, gx1);
+        if (clampedLeft > clampedRight) continue;
+
+        const sx = (clampedLeft - 1) * cellW;
+        const sy = (j - 1) * cellH;
+        const sw = (clampedRight - clampedLeft + 1) * cellW;
+        const sh = cellH;
+
+        mctx.fillStyle = '#6b7280';
+        mctx.fillRect(sx, sy, sw, sh);
+        if (brickPattern) {
+          mctx.fillStyle = brickPattern;
+          mctx.fillRect(sx, sy, sw, sh);
+        }
+      }
     } else if (shape === 'triangle') {
-      const cx = r.x + r.w/2;
-      mctx.moveTo(cx, r.y + 1);
-      mctx.lineTo(r.x + r.w - 1, r.y + r.h - 1);
-      mctx.lineTo(r.x + 1, r.y + r.h - 1);
-      mctx.closePath();
+      // 像素化三角形：逐行填充，与障碍物栅格完全对齐
+      const left = o.x * N + 1;
+      const right = (o.x + o.w) * N + 1;
+      const top = o.y * M + 1;
+      const bottom = (o.y + o.h) * M + 1;
+      const cx = (left + right) / 2;
+      const gx0 = clampi(Math.floor(left), 1, N);
+      const gy0 = clampi(Math.floor(top), 1, M);
+      const gx1 = clampi(Math.ceil(right), 1, N);
+      const gy1 = clampi(Math.ceil(bottom), 1, M);
+      const height = Math.max(1, bottom - top);
+
+      for (let j = gy0; j <= gy1; j++) {
+        const t = clampi((j - top) / height, 0, 1);
+        const halfW = t * (right - left) / 2;
+        const rowLeft = Math.ceil(cx - halfW);
+        const rowRight = Math.floor(cx + halfW);
+        const clampedLeft = clampi(rowLeft, gx0, gx1);
+        const clampedRight = clampi(rowRight, gx0, gx1);
+        if (clampedLeft > clampedRight) continue;
+
+        const sx = (clampedLeft - 1) * cellW;
+        const sy = (j - 1) * cellH;
+        const sw = (clampedRight - clampedLeft + 1) * cellW;
+        const sh = cellH;
+
+        mctx.fillStyle = '#6b7280';
+        mctx.fillRect(sx, sy, sw, sh);
+        if (brickPattern) {
+          mctx.fillStyle = brickPattern;
+          mctx.fillRect(sx, sy, sw, sh);
+        }
+      }
     }
-    mctx.strokeStyle = 'rgba(0,0,0,0.45)';
-    mctx.lineWidth = 1;
-    mctx.stroke();
-    mctx.restore();
 
     // 选中状态：外接矩形框 + 缩放手柄
     if (o.id === selectedId) {
@@ -737,21 +777,7 @@
       mctx.strokeStyle = '#f2a65a';
       mctx.setLineDash([5,4]);
       mctx.lineWidth = 2;
-      mctx.beginPath();
-
-      if (drag.shape === 'rect') {
-        mctx.rect(px, py, pw, ph);
-      } else if (drag.shape === 'circle') {
-        const cx = px + pw/2, cy = py + ph/2;
-        mctx.ellipse(cx, cy, pw/2, ph/2, 0, 0, Math.PI*2);
-      } else if (drag.shape === 'triangle') {
-        const cx = px + pw/2;
-        mctx.moveTo(cx, py);
-        mctx.lineTo(px + pw, py + ph);
-        mctx.lineTo(px, py + ph);
-        mctx.closePath();
-      }
-      mctx.stroke();
+      mctx.strokeRect(px, py, pw, ph);
       mctx.setLineDash([]);
     }
   }
@@ -998,7 +1024,6 @@
     if (drag && drag.mode === 'new-wall') {
       const x = Math.min(drag.curX, drag.startX), y = Math.min(drag.curY, drag.startY);
       let w = Math.abs(drag.curX - drag.startX), h = Math.abs(drag.curY - drag.startY);
-      // 拖拽太小则生成默认大小
       if (w < 0.015 && h < 0.015) { w = DEFAULT_WALL_W; h = DEFAULT_WALL_H; }
       objects.push({
         id: nextId++, type: 'wall', shape: drag.shape,
