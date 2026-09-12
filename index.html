@@ -167,7 +167,7 @@
 <script>
 (function(){
   "use strict";
-  // 捕获运行时错误并显示在界面上，便于调试
+  // 捕获运行时错误
   window.onerror = function(msg, url, line, col, error) {
     const log = document.getElementById('errorLog');
     if (log) {
@@ -183,6 +183,13 @@
   const fctx = fluidCanvas.getContext('2d');
   const mctx = mainCanvas.getContext('2d', { alpha: false });
 
+  // 离屏画布：缓存网格背景
+  const gridCache = document.createElement('canvas');
+  const gridCtx = gridCache.getContext('2d');
+
+  // 像素砖块图案缓存
+  let brickPattern = null;
+
   // 关闭抗锯齿 + 兼容旧版 WebKit
   function disableSmoothing(ctx) {
     ctx.imageSmoothingEnabled = false;
@@ -190,6 +197,7 @@
   }
   disableSmoothing(mctx);
   disableSmoothing(fctx);
+  disableSmoothing(gridCtx);
 
   let W = 0, H = 0;
   const SIM_N = 240;
@@ -358,15 +366,18 @@
     }
   }
 
-  /* 物体栅格化与风力注入 */
+  /* ===== 修复：障碍物栅格化，消除间隙 =====
+     让障碍范围完全收缩在墙体内部，避免透明障碍露出背景 */
   function rasterizeObstacles() {
     obstacle.fill(0);
     for (const o of objects) {
       if (o.type !== 'wall') continue;
-      const gx0 = clampi(Math.floor(o.x * N) + 1, 1, N);
-      const gy0 = clampi(Math.floor(o.y * M) + 1, 1, M);
-      const gx1 = clampi(Math.ceil((o.x + o.w) * N) + 1, 1, N);
-      const gy1 = clampi(Math.ceil((o.y + o.h) * M) + 1, 1, M);
+      // 边界向内收缩，确保障碍完全在墙体内
+      const gx0 = clampi(Math.ceil(o.x * N) + 1, 1, N);
+      const gy0 = clampi(Math.ceil(o.y * M) + 1, 1, M);
+      const gx1 = clampi(Math.floor((o.x + o.w) * N), 1, N);
+      const gy1 = clampi(Math.floor((o.y + o.h) * M), 1, M);
+      if (gx0 > gx1 || gy0 > gy1) continue;
       for (let j = gy0; j <= gy1; j++) {
         for (let i = gx0; i <= gx1; i++) {
           obstacle[IX(i, j)] = 1;
@@ -446,8 +457,47 @@
     }
   }
 
-  /* 渲染 */
+  /* ===== 渲染优化 ===== */
   let fluidImgData = null;
+
+  // 生成像素砖块图案
+  function buildBrickPattern() {
+    const px = 6;
+    const patCanvas = document.createElement('canvas');
+    patCanvas.width = px * 2;
+    patCanvas.height = px * 2;
+    const pctx = patCanvas.getContext('2d');
+    disableSmoothing(pctx);
+
+    // 第一层
+    pctx.fillStyle = '#7c8494';
+    pctx.fillRect(0, 0, px*2, px);
+    pctx.fillStyle = '#5c6373';
+    pctx.fillRect(px, 0, px, px-1);
+    // 第二层错位
+    pctx.fillStyle = '#5c6373';
+    pctx.fillRect(0, px, px*2, px);
+    pctx.fillStyle = '#7c8494';
+    pctx.fillRect(px, px, px, px-1);
+
+    brickPattern = mctx.createPattern(patCanvas, 'repeat');
+  }
+
+  // 预渲染网格背景到缓存
+  function renderGridToCache() {
+    gridCache.width = Math.round(W);
+    gridCache.height = Math.round(H);
+    gridCtx.fillStyle = '#dfe3ea';
+    gridCtx.fillRect(0, 0, W, H);
+    const cell = 18;
+    gridCtx.strokeStyle = '#c9cfdb';
+    gridCtx.lineWidth = 1;
+    gridCtx.beginPath();
+    for (let x = 0; x <= W; x += cell) { gridCtx.moveTo(x+0.5, 0); gridCtx.lineTo(x+0.5, H); }
+    for (let y = 0; y <= H; y += cell) { gridCtx.moveTo(0, y+0.5); gridCtx.lineTo(W, y+0.5); }
+    gridCtx.stroke();
+  }
+
   function resizeCanvases() {
     W = stage.clientWidth; H = stage.clientHeight;
     const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
@@ -465,20 +515,16 @@
 
     fluidCanvas.width = N;
     fluidCanvas.height = M;
-    disableSmoothing(fctx); // 修复：重置尺寸后重新关闭抗锯齿
+    disableSmoothing(fctx);
     fluidImgData = fctx.createImageData(N, M);
+
+    // 重建缓存
+    renderGridToCache();
+    buildBrickPattern();
   }
 
   function drawGridBackground() {
-    mctx.fillStyle = '#dfe3ea';
-    mctx.fillRect(0, 0, W, H);
-    const cell = 18;
-    mctx.strokeStyle = '#c9cfdb';
-    mctx.lineWidth = 1;
-    mctx.beginPath();
-    for (let x = 0; x <= W; x += cell) { mctx.moveTo(x+0.5, 0); mctx.lineTo(x+0.5, H); }
-    for (let y = 0; y <= H; y += cell) { mctx.moveTo(0, y+0.5); mctx.lineTo(W, y+0.5); }
-    mctx.stroke();
+    mctx.drawImage(gridCache, 0, 0);
   }
 
   function renderFluidDensity() {
@@ -517,25 +563,27 @@
 
   function fracToPx(o) { return { x: o.x * W, y: o.y * H, w: o.w * W, h: o.h * H }; }
 
+  /* ===== 优化：墙体渲染，移除逐像素循环 ===== */
   function drawWallSprite(o) {
     const r = fracToPx(o);
-    const px = 6;
-    mctx.save();
-    mctx.beginPath(); mctx.rect(r.x, r.y, r.w, r.h); mctx.clip();
+    // 底色
     mctx.fillStyle = '#6b7280';
     mctx.fillRect(r.x, r.y, r.w, r.h);
-    let rowIdx = 0;
-    for (let yy = r.y; yy < r.y + r.h; yy += px * 2) {
-      const offset = (rowIdx % 2 === 0) ? 0 : px;
-      for (let xx = r.x - px; xx < r.x + r.w + px; xx += px * 2) {
-        mctx.fillStyle = (Math.floor((xx + yy) / px) % 2 === 0) ? '#7c8494' : '#5c6373';
-        mctx.fillRect(xx + offset, yy, px * 2 - 1, px - 1);
-      }
-      rowIdx++;
+    // 砖块图案
+    if (brickPattern) {
+      mctx.save();
+      mctx.beginPath();
+      mctx.rect(r.x, r.y, r.w, r.h);
+      mctx.clip();
+      mctx.fillStyle = brickPattern;
+      mctx.fillRect(r.x, r.y, r.w, r.h);
+      mctx.restore();
     }
+    // 内描边
     mctx.strokeStyle = 'rgba(0,0,0,0.45)';
+    mctx.lineWidth = 1;
     mctx.strokeRect(r.x+1, r.y+1, r.w-2, r.h-2);
-    mctx.restore();
+
     if (o.id === selectedId) {
       mctx.strokeStyle = '#5ad1d6';
       mctx.lineWidth = 2;
@@ -692,7 +740,6 @@
   /* 交互处理 */
   function toFrac(evt) {
     const rect = mainCanvas.getBoundingClientRect();
-    // 修复：使用元素自身尺寸计算，避免全局变量不同步
     return {
       x: (evt.clientX - rect.left) / rect.width,
       y: (evt.clientY - rect.top) / rect.height
@@ -727,7 +774,6 @@
     }
 
     if (currentTool === 'blower') {
-      // 修复：放置时边界钳制
       const bx = clampi(fx - DEFAULT_BLOWER_W/2, 0, 1 - DEFAULT_BLOWER_W);
       const by = clampi(fy - DEFAULT_BLOWER_H/2, 0, 1 - DEFAULT_BLOWER_H);
       objects.push({
