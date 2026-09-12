@@ -28,7 +28,6 @@
       touch-action: none;
     }
     #app { display: flex; flex-direction: column; width: 100vw; height: 100vh; }
-
     #toolbar {
       flex: 0 0 auto;
       display: flex; align-items: center; gap: 6px;
@@ -46,9 +45,9 @@
       text-shadow: 2px 2px 0 rgba(0,0,0,0.35);
     }
     .sep { width: 2px; align-self: stretch; background: var(--line); margin: 0 4px; }
-
     button.tool {
-      appearance: none; border: none; cursor: pointer;
+      -webkit-appearance: none; appearance: none;
+      border: none; cursor: pointer;
       width: 44px; height: 44px;
       background: var(--panel-2);
       border: 2px solid var(--line);
@@ -56,6 +55,7 @@
       image-rendering: pixelated;
       display: flex; align-items: center; justify-content: center;
       position: relative;
+      padding: 0;
     }
     button.tool canvas { image-rendering: pixelated; width: 24px; height: 24px; pointer-events: none; }
     button.tool:active { transform: translateY(1px); }
@@ -68,7 +68,6 @@
       font-size: 9px; color: var(--text-dim); white-space: nowrap;
     }
     .tool-group { display: flex; gap: 6px; padding-bottom: 14px; }
-
     .ctrl {
       display: flex; flex-direction: column; align-items: flex-start;
       font-size: 10px; color: var(--text-dim); gap: 2px;
@@ -76,15 +75,16 @@
     }
     .ctrl input[type=range] { width: 90px; accent-color: var(--accent-2); }
     .ctrl .val { color: var(--accent); font-weight: bold; }
-
     .chk { display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--text-dim); padding-bottom: 14px; }
-
     #playPause {
+      -webkit-appearance: none; appearance: none;
       width: 44px; height: 44px; background: var(--panel-2); border: 2px solid var(--line);
       color: var(--text); cursor: pointer; font-size: 16px;
       box-shadow: inset -2px -2px 0 rgba(0,0,0,0.35), inset 2px 2px 0 rgba(255,255,255,0.06);
+      padding: 0;
     }
     #clearBtn {
+      -webkit-appearance: none; appearance: none;
       height: 44px; padding: 0 10px; background: var(--danger); border: 2px solid #a83b4d;
       color: #fff; font-weight: bold; cursor: pointer; font-size: 11px;
     }
@@ -93,9 +93,13 @@
       padding-right: 4px;
     }
     #status b { color: var(--accent-2); }
-
     #stage { position: relative; flex: 1 1 auto; overflow: hidden; background: var(--paper); }
-    #stage canvas { position: absolute; top: 0; left: 0; image-rendering: pixelated; image-rendering: -moz-crisp-edges; image-rendering: crisp-edges; }
+    #stage canvas {
+      position: absolute; top: 0; left: 0;
+      image-rendering: pixelated;
+      image-rendering: -moz-crisp-edges;
+      image-rendering: crisp-edges;
+    }
     #hint {
       position: absolute; left: 10px; bottom: 10px; z-index: 4;
       font-size: 10px; color: #4a5066; background: rgba(255,255,255,0.55);
@@ -160,11 +164,9 @@
     <div id="errorLog"></div>
   </div>
 </div>
-
 <script>
 (function(){
   "use strict";
-
   // 捕获运行时错误并显示在界面上，便于调试
   window.onerror = function(msg, url, line, col, error) {
     const log = document.getElementById('errorLog');
@@ -180,8 +182,14 @@
   const mainCanvas = document.getElementById('mainCanvas');
   const fctx = fluidCanvas.getContext('2d');
   const mctx = mainCanvas.getContext('2d', { alpha: false });
-  mctx.imageSmoothingEnabled = false;
-  fctx.imageSmoothingEnabled = false;
+
+  // 关闭抗锯齿 + 兼容旧版 WebKit
+  function disableSmoothing(ctx) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.webkitImageSmoothingEnabled = false;
+  }
+  disableSmoothing(mctx);
+  disableSmoothing(fctx);
 
   let W = 0, H = 0;
   const SIM_N = 240;
@@ -194,7 +202,7 @@
   let drag = null;
   let pointerDownInfo = null;
   let longPressTimer = null;
-  let showStreamlines = false;   // 提前声明，避免提升问题
+  let showStreamlines = false;
 
   let params = {
     force: 6.0,
@@ -235,6 +243,7 @@
     x[IX(0, M+1)]     = 0.5 * (x[IX(1, M+1)] + x[IX(0, M)]);
     x[IX(N+1, 0)]     = 0.5 * (x[IX(N, 0)] + x[IX(N+1, 1)]);
     x[IX(N+1, M+1)]   = 0.5 * (x[IX(N, M+1)] + x[IX(N+1, M)]);
+
     for (let j = 1; j <= M; j++) {
       for (let i = 1; i <= N; i++) {
         if (obstacle[IX(i, j)]) x[IX(i, j)] = 0;
@@ -378,11 +387,9 @@
       if (o.angle === 90)  dirY = 1;
       if (o.angle === 180) dirX = -1;
       if (o.angle === 270) dirY = -1;
-
       const span = Math.max(2, Math.round((dirX !== 0 ? sizeCellsY : sizeCellsX)));
       const forceFactor = 0.5;
       const densityFactor = 0.5;
-
       for (let s = 0; s < span; s++) {
         let gx, gy;
         if (dirX !== 0) {
@@ -441,16 +448,16 @@
 
   /* 渲染 */
   let fluidImgData = null;
-
   function resizeCanvases() {
     W = stage.clientWidth; H = stage.clientHeight;
     const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+
     mainCanvas.width = Math.round(W * dpr);
     mainCanvas.height = Math.round(H * dpr);
     mainCanvas.style.width = W + 'px';
     mainCanvas.style.height = H + 'px';
     mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    mctx.imageSmoothingEnabled = false;
+    disableSmoothing(mctx);
 
     SIM_M = clampi(Math.round(SIM_N * (H / Math.max(1, W))), 80, 200);
     allocateFields();
@@ -458,6 +465,7 @@
 
     fluidCanvas.width = N;
     fluidCanvas.height = M;
+    disableSmoothing(fctx); // 修复：重置尺寸后重新关闭抗锯齿
     fluidImgData = fctx.createImageData(N, M);
   }
 
@@ -495,7 +503,7 @@
       }
     }
     fctx.putImageData(fluidImgData, 0, 0);
-    mctx.imageSmoothingEnabled = false;
+    disableSmoothing(mctx);
     mctx.drawImage(fluidCanvas, 0, 0, N, M, 0, 0, W, H);
   }
 
@@ -615,7 +623,7 @@
   /* UI 图标绘制 */
   function drawIcon(canvas, kind) {
     const ctx = canvas.getContext('2d');
-    ctx.imageSmoothingEnabled = false;
+    disableSmoothing(ctx);
     ctx.clearRect(0, 0, 16, 16);
     if (kind === 'select') {
       ctx.fillStyle = '#eef1f7';
@@ -684,7 +692,11 @@
   /* 交互处理 */
   function toFrac(evt) {
     const rect = mainCanvas.getBoundingClientRect();
-    return { x: (evt.clientX - rect.left) / W, y: (evt.clientY - rect.top) / H };
+    // 修复：使用元素自身尺寸计算，避免全局变量不同步
+    return {
+      x: (evt.clientX - rect.left) / rect.width,
+      y: (evt.clientY - rect.top) / rect.height
+    };
   }
 
   function hitTest(fx, fy) {
@@ -713,16 +725,21 @@
       drag = { mode: 'new-wall', startX: fx, startY: fy, curX: fx, curY: fy };
       return;
     }
+
     if (currentTool === 'blower') {
+      // 修复：放置时边界钳制
+      const bx = clampi(fx - DEFAULT_BLOWER_W/2, 0, 1 - DEFAULT_BLOWER_W);
+      const by = clampi(fy - DEFAULT_BLOWER_H/2, 0, 1 - DEFAULT_BLOWER_H);
       objects.push({
         id: nextId++, type: 'blower',
-        x: fx - DEFAULT_BLOWER_W/2, y: fy - DEFAULT_BLOWER_H/2,
+        x: bx, y: by,
         w: DEFAULT_BLOWER_W, h: DEFAULT_BLOWER_H, angle: 0
       });
       selectedId = nextId - 1;
       updateStatus();
       return;
     }
+
     if (currentTool === 'delete') {
       const hit = hitTest(fx, fy);
       if (hit) {
@@ -731,6 +748,7 @@
       }
       return;
     }
+
     const hit = hitTest(fx, fy);
     if (hit && hitResizeHandle(fx, fy, hit)) {
       drag = { mode: 'resize', id: hit.id, startX: fx, startY: fy, origW: hit.w, origH: hit.h };
@@ -760,6 +778,7 @@
       clearTimeout(longPressTimer); longPressTimer = null;
     }
     if (!drag) return;
+
     if (drag.mode === 'new-wall') {
       drag.curX = clampi(fx, 0, 1); drag.curY = clampi(fy, 0, 1);
     } else if (drag.mode === 'move') {
@@ -782,6 +801,7 @@
   mainCanvas.addEventListener('pointerup', e => {
     if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
     const { x: fx, y: fy } = toFrac(e);
+
     if (drag && drag.mode === 'new-wall') {
       const x = Math.min(drag.curX, drag.startX), y = Math.min(drag.curY, drag.startY);
       let w = Math.abs(drag.curX - drag.startX), h = Math.abs(drag.curY - drag.startY);
@@ -790,10 +810,12 @@
       selectedId = nextId - 1;
       updateStatus();
     }
+
     if (pointerDownInfo && !pointerDownInfo.moved && drag && drag.mode === 'move') {
       const o = objects.find(o => o.id === drag.id);
       if (o && o.type === 'blower') o.angle = (o.angle + 90) % 360;
     }
+
     drag = null; pointerDownInfo = null;
   });
 
