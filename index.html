@@ -123,9 +123,17 @@
         <canvas width="16" height="16" data-icon="select"></canvas>
         <span class="lbl">选择</span>
       </button>
-      <button class="tool" data-tool="wall" title="放置墙体：拖拽画出矩形">
+      <button class="tool" data-tool="wall" title="放置矩形墙体：拖拽画出大小">
         <canvas width="16" height="16" data-icon="wall"></canvas>
-        <span class="lbl">墙体</span>
+        <span class="lbl">矩形墙</span>
+      </button>
+      <button class="tool" data-tool="wall-tri" title="放置三角形墙体：拖拽画出大小">
+        <canvas width="16" height="16" data-icon="wall-tri"></canvas>
+        <span class="lbl">三角墙</span>
+      </button>
+      <button class="tool" data-tool="wall-circle" title="放置圆形墙体：拖拽画出大小">
+        <canvas width="16" height="16" data-icon="wall-circle"></canvas>
+        <span class="lbl">圆形墙</span>
       </button>
       <button class="tool" data-tool="blower" title="放置鼓风机：点击放置，点击旋转朝向，拖右下角可缩放">
         <canvas width="16" height="16" data-icon="blower"></canvas>
@@ -155,7 +163,7 @@
     <div class="chk">
       <label><input type="checkbox" id="streamToggle"> 流线粒子<br>STREAMLINES</label>
     </div>
-    <div id="status">工具: <b id="toolName">选择</b> · 物体: <b id="objCount">0</b></div>
+    <div id="status">工具: <b id="toolName">选择</b> · 物体: <b id="objCount">0</b> · FPS: <b id="fpsVal">0</b></div>
   </div>
   <div id="stage">
     <canvas id="fluidCanvas"></canvas>
@@ -211,6 +219,12 @@
   let pointerDownInfo = null;
   let longPressTimer = null;
   let showStreamlines = false;
+
+  // FPS 统计
+  let fps = 0;
+  let fpsFrames = 0;
+  let fpsLastTime = performance.now();
+  const fpsValLabel = document.getElementById('fpsVal');
 
   let params = {
     force: 6.0,
@@ -366,21 +380,66 @@
     }
   }
 
-  /* ===== 修复：障碍物栅格化，消除间隙 =====
-     让障碍范围完全收缩在墙体内部，避免透明障碍露出背景 */
+  /* ===== 障碍物栅格化：支持矩形、三角形、圆形 ===== */
   function rasterizeObstacles() {
     obstacle.fill(0);
     for (const o of objects) {
       if (o.type !== 'wall') continue;
-      // 边界向内收缩，确保障碍完全在墙体内
-      const gx0 = clampi(Math.ceil(o.x * N) + 1, 1, N);
-      const gy0 = clampi(Math.ceil(o.y * M) + 1, 1, M);
-      const gx1 = clampi(Math.floor((o.x + o.w) * N), 1, N);
-      const gy1 = clampi(Math.floor((o.y + o.h) * M), 1, M);
-      if (gx0 > gx1 || gy0 > gy1) continue;
-      for (let j = gy0; j <= gy1; j++) {
-        for (let i = gx0; i <= gx1; i++) {
-          obstacle[IX(i, j)] = 1;
+      const shape = o.shape || 'rect';
+
+      if (shape === 'rect') {
+        // 矩形：边界向内收缩，消除间隙
+        const gx0 = clampi(Math.ceil(o.x * N) + 1, 1, N);
+        const gy0 = clampi(Math.ceil(o.y * M) + 1, 1, M);
+        const gx1 = clampi(Math.floor((o.x + o.w) * N), 1, N);
+        const gy1 = clampi(Math.floor((o.y + o.h) * M), 1, M);
+        if (gx0 > gx1 || gy0 > gy1) continue;
+        for (let j = gy0; j <= gy1; j++) {
+          for (let i = gx0; i <= gx1; i++) {
+            obstacle[IX(i, j)] = 1;
+          }
+        }
+      } else if (shape === 'circle') {
+        // 圆形/椭圆
+        const cx = (o.x + o.w/2) * N + 1;
+        const cy = (o.y + o.h/2) * M + 1;
+        const rx = Math.max(0.5, (o.w/2) * N);
+        const ry = Math.max(0.5, (o.h/2) * M);
+        const gx0 = clampi(Math.floor(o.x * N) + 1, 1, N);
+        const gy0 = clampi(Math.floor(o.y * M) + 1, 1, M);
+        const gx1 = clampi(Math.ceil((o.x + o.w) * N), 1, N);
+        const gy1 = clampi(Math.ceil((o.y + o.h) * M), 1, M);
+        for (let j = gy0; j <= gy1; j++) {
+          for (let i = gx0; i <= gx1; i++) {
+            const dx = (i - cx) / rx;
+            const dy = (j - cy) / ry;
+            if (dx*dx + dy*dy <= 1) {
+              obstacle[IX(i, j)] = 1;
+            }
+          }
+        }
+      } else if (shape === 'triangle') {
+        // 等腰三角形：顶点在上，底边在下
+        const left = o.x * N + 1;
+        const right = (o.x + o.w) * N + 1;
+        const top = o.y * M + 1;
+        const bottom = (o.y + o.h) * M + 1;
+        const cx = (left + right) / 2;
+        const gx0 = clampi(Math.floor(left), 1, N);
+        const gy0 = clampi(Math.floor(top), 1, M);
+        const gx1 = clampi(Math.ceil(right), 1, N);
+        const gy1 = clampi(Math.ceil(bottom), 1, M);
+        const height = Math.max(1, bottom - top);
+        for (let j = gy0; j <= gy1; j++) {
+          const t = clampi((j - top) / height, 0, 1);
+          const halfW = t * (right - left) / 2;
+          const rowLeft = cx - halfW;
+          const rowRight = cx + halfW;
+          for (let i = gx0; i <= gx1; i++) {
+            if (i >= rowLeft && i <= rowRight) {
+              obstacle[IX(i, j)] = 1;
+            }
+          }
         }
       }
     }
@@ -563,27 +622,61 @@
 
   function fracToPx(o) { return { x: o.x * W, y: o.y * H, w: o.w * W, h: o.h * H }; }
 
-  /* ===== 优化：墙体渲染，移除逐像素循环 ===== */
+  /* ===== 墙体渲染：支持三种形状 ===== */
   function drawWallSprite(o) {
     const r = fracToPx(o);
+    const shape = o.shape || 'rect';
+
+    // 裁剪 + 填充砖块
+    mctx.save();
+    mctx.beginPath();
+    if (shape === 'rect') {
+      mctx.rect(r.x, r.y, r.w, r.h);
+    } else if (shape === 'circle') {
+      const cx = r.x + r.w/2;
+      const cy = r.y + r.h/2;
+      mctx.ellipse(cx, cy, r.w/2, r.h/2, 0, 0, Math.PI*2);
+    } else if (shape === 'triangle') {
+      const cx = r.x + r.w/2;
+      mctx.moveTo(cx, r.y);
+      mctx.lineTo(r.x + r.w, r.y + r.h);
+      mctx.lineTo(r.x, r.y + r.h);
+      mctx.closePath();
+    }
+    mctx.clip();
+
     // 底色
     mctx.fillStyle = '#6b7280';
     mctx.fillRect(r.x, r.y, r.w, r.h);
     // 砖块图案
     if (brickPattern) {
-      mctx.save();
-      mctx.beginPath();
-      mctx.rect(r.x, r.y, r.w, r.h);
-      mctx.clip();
       mctx.fillStyle = brickPattern;
       mctx.fillRect(r.x, r.y, r.w, r.h);
-      mctx.restore();
     }
+    mctx.restore();
+
     // 内描边
+    mctx.save();
+    mctx.beginPath();
+    if (shape === 'rect') {
+      mctx.rect(r.x+1, r.y+1, r.w-2, r.h-2);
+    } else if (shape === 'circle') {
+      const cx = r.x + r.w/2;
+      const cy = r.y + r.h/2;
+      mctx.ellipse(cx, cy, r.w/2 - 1, r.h/2 - 1, 0, 0, Math.PI*2);
+    } else if (shape === 'triangle') {
+      const cx = r.x + r.w/2;
+      mctx.moveTo(cx, r.y + 1);
+      mctx.lineTo(r.x + r.w - 1, r.y + r.h - 1);
+      mctx.lineTo(r.x + 1, r.y + r.h - 1);
+      mctx.closePath();
+    }
     mctx.strokeStyle = 'rgba(0,0,0,0.45)';
     mctx.lineWidth = 1;
-    mctx.strokeRect(r.x+1, r.y+1, r.w-2, r.h-2);
+    mctx.stroke();
+    mctx.restore();
 
+    // 选中状态：外接矩形框 + 缩放手柄
     if (o.id === selectedId) {
       mctx.strokeStyle = '#5ad1d6';
       mctx.lineWidth = 2;
@@ -634,13 +727,31 @@
       if (o.type === 'blower') drawBlowerSprite(o);
     }
     if (showStreamlines) renderParticles();
+
+    // 拖拽创建预览
     if (drag && drag.mode === 'new-wall') {
       const x = Math.min(drag.curX, drag.startX), y = Math.min(drag.curY, drag.startY);
       const w = Math.abs(drag.curX - drag.startX), h = Math.abs(drag.curY - drag.startY);
+      const px = x * W, py = y * H, pw = w * W, ph = h * H;
+
       mctx.strokeStyle = '#f2a65a';
       mctx.setLineDash([5,4]);
       mctx.lineWidth = 2;
-      mctx.strokeRect(x * W, y * H, w * W, h * H);
+      mctx.beginPath();
+
+      if (drag.shape === 'rect') {
+        mctx.rect(px, py, pw, ph);
+      } else if (drag.shape === 'circle') {
+        const cx = px + pw/2, cy = py + ph/2;
+        mctx.ellipse(cx, cy, pw/2, ph/2, 0, 0, Math.PI*2);
+      } else if (drag.shape === 'triangle') {
+        const cx = px + pw/2;
+        mctx.moveTo(cx, py);
+        mctx.lineTo(px + pw, py + ph);
+        mctx.lineTo(px, py + ph);
+        mctx.closePath();
+      }
+      mctx.stroke();
       mctx.setLineDash([]);
     }
   }
@@ -651,6 +762,16 @@
     try {
       const dt = Math.min(0.033, (t - lastT) / 1000) || 0.016;
       lastT = t;
+
+      // FPS 统计
+      fpsFrames++;
+      if (t - fpsLastTime >= 1000) {
+        fps = fpsFrames;
+        fpsFrames = 0;
+        fpsLastTime = t;
+        if (fpsValLabel) fpsValLabel.textContent = fps;
+      }
+
       if (!paused) {
         rasterizeObstacles();
         injectBlowers(dt);
@@ -683,6 +804,23 @@
       ctx.fillRect(1,3,7,4); ctx.fillRect(9,3,6,4);
       ctx.fillRect(1,8,4,4); ctx.fillRect(6,8,9,4);
       ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.strokeRect(1,3,14,9);
+    } else if (kind === 'wall-tri') {
+      ctx.fillStyle = '#9aa2b3';
+      ctx.beginPath();
+      ctx.moveTo(8, 2);
+      ctx.lineTo(14, 13);
+      ctx.lineTo(2, 13);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+      ctx.stroke();
+    } else if (kind === 'wall-circle') {
+      ctx.fillStyle = '#9aa2b3';
+      ctx.beginPath();
+      ctx.arc(8, 8, 6, 0, Math.PI*2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+      ctx.stroke();
     } else if (kind === 'blower') {
       ctx.fillStyle = '#5ad1d6';
       ctx.fillRect(2,2,12,12);
@@ -703,7 +841,14 @@
     currentTool = t;
     selectedId = null;
     toolButtons.forEach(b => b.classList.toggle('active', b.dataset.tool === t));
-    toolNameLabel.textContent = { select:'选择', wall:'墙体', blower:'鼓风机', delete:'删除' }[t];
+    toolNameLabel.textContent = {
+      select:'选择',
+      wall:'矩形墙',
+      'wall-tri':'三角墙',
+      'wall-circle':'圆形墙',
+      blower:'鼓风机',
+      delete:'删除'
+    }[t];
   }
   toolButtons.forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
   setTool('select');
@@ -768,8 +913,10 @@
     const { x: fx, y: fy } = toFrac(e);
     pointerDownInfo = { fx, fy, time: performance.now(), moved: false };
 
-    if (currentTool === 'wall') {
-      drag = { mode: 'new-wall', startX: fx, startY: fy, curX: fx, curY: fy };
+    // 墙体工具（三种形状）
+    if (currentTool === 'wall' || currentTool === 'wall-tri' || currentTool === 'wall-circle') {
+      const shape = currentTool === 'wall' ? 'rect' : (currentTool === 'wall-tri' ? 'triangle' : 'circle');
+      drag = { mode: 'new-wall', shape: shape, startX: fx, startY: fy, curX: fx, curY: fy };
       return;
     }
 
@@ -851,8 +998,12 @@
     if (drag && drag.mode === 'new-wall') {
       const x = Math.min(drag.curX, drag.startX), y = Math.min(drag.curY, drag.startY);
       let w = Math.abs(drag.curX - drag.startX), h = Math.abs(drag.curY - drag.startY);
+      // 拖拽太小则生成默认大小
       if (w < 0.015 && h < 0.015) { w = DEFAULT_WALL_W; h = DEFAULT_WALL_H; }
-      objects.push({ id: nextId++, type: 'wall', x: clampi(x, 0, 1-w), y: clampi(y, 0, 1-h), w, h });
+      objects.push({
+        id: nextId++, type: 'wall', shape: drag.shape,
+        x: clampi(x, 0, 1-w), y: clampi(y, 0, 1-h), w, h
+      });
       selectedId = nextId - 1;
       updateStatus();
     }
@@ -886,7 +1037,7 @@
 
   // 初始场景
   objects.push({ id: nextId++, type: 'blower', x: 0.06, y: 0.44, w: 0.07, h: 0.07, angle: 0 });
-  objects.push({ id: nextId++, type: 'wall', x: 0.45, y: 0.32, w: 0.05, h: 0.36 });
+  objects.push({ id: nextId++, type: 'wall', shape: 'rect', x: 0.45, y: 0.32, w: 0.05, h: 0.36 });
   updateStatus();
 
   requestAnimationFrame(loop);
