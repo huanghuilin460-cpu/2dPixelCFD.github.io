@@ -243,6 +243,7 @@
 
   // 双击判定
   let lastTapTime = 0;
+  const DOUBLE_TAP_DELAY = 300; // <--- 修復處：補上雙擊判定時間常數
 
   let params = { force: 6.0, diff: 0.0002, visc: 0.0 };
 
@@ -1046,7 +1047,7 @@
     showStreamlines = e.target.checked;
   });
 
-  // 主循環
+  // 主循环
   let lastTime = performance.now();
   function mainLoop(now) {
     const dt = Math.min(0.04, (now - lastTime) / 1000);
@@ -1060,7 +1061,7 @@
     
     render();
 
-    // 計算 FPS
+    // 计算 FPS
     fpsFrames++;
     if (now - fpsLastTime >= 1000) {
       document.getElementById('fpsVal').innerText = fpsFrames;
@@ -1070,7 +1071,7 @@
     requestAnimationFrame(mainLoop);
   }
 
-  // 繪製工具欄圖標
+  // 绘制工具栏图标
   document.querySelectorAll('canvas[data-icon]').forEach(c => {
     const ctx = c.getContext('2d');
     ctx.fillStyle = '#eef1f7';
