@@ -233,6 +233,7 @@
   let nextId = 1;
   let selectedId = null;
   let pointerDownInfo = null;
+  let longPressTimer = null; // 修复：补上长按定时器声明
   let showStreamlines = false;
 
   // FPS 统计
@@ -1025,9 +1026,7 @@
     if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
 
     // 双击旋转判定（抬起时判定，避免拖拽误触）
-    if (!pointerDownInfo || pointerDownInfo.action === 'drawNew') {
-      // 空白点击或绘制结束，不处理双击
-    } else {
+    if (pointerDownInfo && pointerDownInfo.action !== 'drawNew') {
       const p = getPointer(e);
       const target = hitTest(p.x, p.y);
       if (target && !pointerDownInfo.moved) {
