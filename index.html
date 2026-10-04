@@ -169,11 +169,11 @@
       <input type="range" id="forceSlider" min="1" max="15" step="0.5" value="6">
     </div>
     <div class="ctrl">
-      <span>扩散 DIFFUSION <span class="val" id="diffVal">0.0002</span></span>
+      <span>扩散 DIFFUSION <span class="val" id="diffVal">0.002</span></span>
       <input type="range" id="diffSlider" min="0" max="20" step="1" value="2">
     </div>
     <div class="ctrl">
-      <span>粘度 VISCOSITY <span class="val" id="viscVal">0.0000</span></span>
+      <span>粘度 VISCOSITY <span class="val" id="viscVal">0.000</span></span>
       <input type="range" id="viscSlider" min="0" max="20" step="1" value="0">
     </div>
     <div class="chk">
@@ -243,9 +243,10 @@
 
   // 双击判定
   let lastTapTime = 0;
-  const DOUBLE_TAP_DELAY = 300; // <--- 修復處：補上雙擊判定時間常數
+  let lastTapId = null;
+  const DOUBLE_TAP_DELAY = 300;
 
-  let params = { force: 6.0, diff: 0.0002, visc: 0.0 };
+  let params = { force: 6.0, diff: 0.002, visc: 0.0 };
 
   /* 流体求解器 */
   let N = SIM_N, M = SIM_M;
@@ -293,11 +294,9 @@
     const bounce = 0.6; 
     const perturb = 0.5;
     const forceBase = params.force * 0.15;
-
     for (let j = 1; j <= M; j++) {
       for (let i = 1; i <= N; i++) {
         if (!obstacle[IX(i, j)]) continue;
-
         if (j > 1 && !obstacle[IX(i, j-1)]) {
           const idx = IX(i, j-1);
           if (v[idx] > 0) v[idx] = -bounce * v[idx];
@@ -322,7 +321,7 @@
     }
   }
 
-  // ★ 修正擴散效果：防止藍色空氣被牆體吞噬，並實現蘑菇雲向外擴散的視覺效果 ★
+  // 修正扩散效果：防止蓝色空气被墙体吞噬，实现蘑菇云向外扩散的视觉效果
   function bounceDensity() {
     for (let j = 1; j <= M; j++) {
       for (let i = 1; i <= N; i++) {
@@ -334,15 +333,13 @@
             if (i < N && !obstacle[IX(i+1, j)]) neighbors.push(IX(i+1, j));
             if (j > 1 && !obstacle[IX(i, j-1)]) neighbors.push(IX(i, j-1));
             if (j < M && !obstacle[IX(i, j+1)]) neighbors.push(IX(i, j+1));
-
             if (neighbors.length > 0) {
               let share = d / neighbors.length;
               for (let n of neighbors) {
-                // 將誤入牆體的密度放大彈出，形成氣流撞牆散開的效果
                 dens[n] += share * 1.5; 
               }
             }
-            dens[IX(i, j)] = 0; // 清除牆內密度
+            dens[IX(i, j)] = 0;
           }
         }
       }
@@ -452,7 +449,7 @@
     if (params.diff > 0) diffuse(0, dens, dens0, params.diff, dt, 4);
     [dens0, dens] = [dens, dens0];
     advect(0, dens, dens0, u, v, dt);
-    bounceDensity(); // 彈出誤入牆體的空氣密度，增強擴散效果
+    bounceDensity();
 
     for (let k = 0; k < size; k++) {
       dens[k] *= 0.9985;
@@ -488,8 +485,8 @@
     for (const o of objects) {
       if (o.type !== 'wall') continue;
       const shape = o.shape || 'rect';
-      const angle = (o.angle || 0) % 360;
       const aabb = getWorldAABB(o);
+      const angle = (o.angle || 0) % 360;
 
       if (shape === 'rect') {
         const gx0 = clampi(Math.ceil(aabb.x * N) + 1, 1, N);
@@ -661,6 +658,7 @@
     patCanvas.height = px * 2;
     const pctx = patCanvas.getContext('2d');
     disableSmoothing(pctx);
+
     pctx.fillStyle = '#7c8494';
     pctx.fillRect(0, 0, px*2, px);
     pctx.fillStyle = '#5c6373';
@@ -669,6 +667,7 @@
     pctx.fillRect(0, px, px*2, px);
     pctx.fillStyle = '#7c8494';
     pctx.fillRect(px, px, px, px-1);
+
     brickPattern = mctx.createPattern(patCanvas, 'repeat');
   }
 
@@ -689,19 +688,23 @@
   function resizeCanvases() {
     W = stage.clientWidth; H = stage.clientHeight;
     const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+
     mainCanvas.width = Math.round(W * dpr);
     mainCanvas.height = Math.round(H * dpr);
     mainCanvas.style.width = W + 'px';
     mainCanvas.style.height = H + 'px';
     mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     disableSmoothing(mctx);
+
     SIM_M = clampi(Math.round(SIM_N * (H / Math.max(1, W))), 80, 200);
     allocateFields();
     initParticles();
+
     fluidCanvas.width = N;
     fluidCanvas.height = M;
     disableSmoothing(fctx);
     fluidImgData = fctx.createImageData(N, M);
+
     renderGridToCache();
     buildBrickPattern();
     rasterizeObstacles();
@@ -750,8 +753,8 @@
     const cellW = W / N;
     const cellH = H / M;
     const aabb = getWorldAABB(o);
-
     let rows = [];
+
     if (shape === 'rect') {
       const gx0 = clampi(Math.ceil(aabb.x * N) + 1, 1, N);
       const gy0 = clampi(Math.ceil(aabb.y * M) + 1, 1, M);
@@ -794,15 +797,14 @@
         for (let i = gx0; i <= gx1; i++) {
           const t = clampi(angle === 90 ? (right - i) / width : (i - left) / width, 0, 1);
           const halfH = t * (bottom - top) / 2;
-          rows.push({ j: i, left: Math.ceil(cy - halfH), right: Math.floor(cy + halfH) }); // 這裡利用 row.j 作為 i, left/right 作為 j
+          rows.push({ j: i, left: Math.ceil(cy - halfH), right: Math.floor(cy + halfH), isVertical: true });
         }
       }
     }
 
     for (const row of rows) {
       let sx, sy, sw, sh;
-      if (shape === 'triangle' && (o.angle === 90 || o.angle === 270)) {
-        // 特別處理左右朝向的三角形（因為列舉順序翻轉）
+      if (row.isVertical) {
         const colTop = clampi(row.left, 1, M);
         const colBottom = clampi(row.right, 1, M);
         if (colTop > colBottom) continue;
@@ -842,7 +844,6 @@
     mctx.fillStyle = '#fff';
     mctx.beginPath(); mctx.moveTo(r.w/2-2, 0); mctx.lineTo(r.w/2-10, -7); mctx.lineTo(r.w/2-10, 7); mctx.closePath(); mctx.fill();
     mctx.restore();
-
     if (o.id === selectedId) drawSelectionHandles(getWorldAABB(o));
   }
 
@@ -858,32 +859,31 @@
   function render() {
     drawGridBackground();
     renderFluidDensity();
-    if (showStreamlines) renderParticles();
-
     for (const o of objects) {
       if (o.type === 'wall') drawWallSprite(o);
     }
     for (const o of objects) {
       if (o.type === 'blower') drawBlowerSprite(o);
     }
+    if (showStreamlines) renderParticles();
 
-    // 繪製 UI 拖拽輔助線
+    // 绘制 UI 拖拽辅助线
     if (pointerDownInfo && pointerDownInfo.action === 'drawNew') {
        mctx.strokeStyle = '#f2a65a'; mctx.lineWidth = 2; mctx.setLineDash([4,4]);
        const r = pointerDownInfo.tempAABB;
        mctx.strokeRect(r.x * W, r.y * H, r.w * W, r.h * H);
        mctx.setLineDash([]);
     }
-
     document.getElementById('objCount').innerText = objects.length;
   }
 
-  // ===== 交互與工具邏輯 =====
+  // ===== 交互逻辑 =====
   function getPointer(e) {
     const rect = mainCanvas.getBoundingClientRect();
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    return { x: (clientX - rect.left) / W, y: (clientY - rect.top) / H };
+    return {
+      x: (e.clientX - rect.left) / rect.width,
+      y: (e.clientY - rect.top) / rect.height
+    };
   }
 
   function hitTest(x, y) {
@@ -896,56 +896,78 @@
 
   function hitResize(x, y, o) {
     const aabb = getWorldAABB(o);
-    const hw = 16 / W, hh = 16 / H;
+    const hw = 18 / W, hh = 18 / H;
     return (x >= aabb.x + aabb.w - hw && x <= aabb.x + aabb.w && y >= aabb.y + aabb.h - hh && y <= aabb.y + aabb.h);
   }
 
-  mainCanvas.addEventListener('pointerdown', (e) => {
-    const p = getPointer(e);
-    const now = Date.now();
+  // 默认尺寸（翻倍）
+  const DEFAULT_WALL_W = 0.06, DEFAULT_WALL_H = 0.32;
+  const DEFAULT_BLOWER_W = 0.14, DEFAULT_BLOWER_H = 0.14;
 
-    // 雙擊旋轉
-    if (now - lastTapTime < DOUBLE_TAP_DELAY) {
-      const target = hitTest(p.x, p.y);
-      if (target) {
-        target.angle = ((target.angle || 0) + 90) % 360;
-        rasterizeObstacles();
-        return;
-      }
-    }
-    lastTapTime = now;
+  mainCanvas.addEventListener('pointerdown', (e) => {
+    mainCanvas.setPointerCapture(e.pointerId);
+    const p = getPointer(e);
 
     if (currentTool === 'delete') {
       const target = hitTest(p.x, p.y);
       if (target) {
         objects = objects.filter(o => o.id !== target.id);
+        selectedId = null;
         rasterizeObstacles();
       }
       return;
     }
 
     if (currentTool.startsWith('wall')) {
-      pointerDownInfo = { action: 'drawNew', startX: p.x, startY: p.y, tempAABB: { x: p.x, y: p.y, w: 0, h: 0 } };
+      pointerDownInfo = {
+        action: 'drawNew',
+        shape: currentTool === 'wall' ? 'rect' : (currentTool === 'wall-tri' ? 'triangle' : 'circle'),
+        startX: p.x, startY: p.y,
+        tempAABB: { x: p.x, y: p.y, w: 0, h: 0 }
+      };
       return;
     }
 
     if (currentTool === 'blower') {
-      const o = { id: nextId++, type: 'blower', x: p.x - 0.04, y: p.y - 0.04, w: 0.08, h: 0.08, angle: 0 };
+      // 点击放置鼓风机，居中放置，边界钳制
+      const bx = clampi(p.x - DEFAULT_BLOWER_W/2, 0, 1 - DEFAULT_BLOWER_W);
+      const by = clampi(p.y - DEFAULT_BLOWER_H/2, 0, 1 - DEFAULT_BLOWER_H);
+      const o = {
+        id: nextId++, type: 'blower',
+        x: bx, y: by,
+        w: DEFAULT_BLOWER_W, h: DEFAULT_BLOWER_H, angle: 0
+      };
       objects.push(o);
       selectedId = o.id;
-      pointerDownInfo = { action: 'move', obj: o, offX: 0.04, offY: 0.04 };
+      rasterizeObstacles();
       return;
     }
 
-    // 選擇工具
+    // 选择工具
     const target = hitTest(p.x, p.y);
     if (target) {
       selectedId = target.id;
       if (hitResize(p.x, p.y, target)) {
         const aabb = getWorldAABB(target);
-        pointerDownInfo = { action: 'resize', obj: target, aabbX: aabb.x, aabbY: aabb.y };
+        pointerDownInfo = {
+          action: 'resize', obj: target,
+          aabbX: aabb.x, aabbY: aabb.y,
+          origW: target.w, origH: target.h
+        };
       } else {
-        pointerDownInfo = { action: 'move', obj: target, offX: p.x - target.x, offY: p.y - target.y };
+        pointerDownInfo = {
+          action: 'move', obj: target,
+          offX: p.x - target.x, offY: p.y - target.y
+        };
+        // 长按删除
+        if (e.pointerType === 'touch') {
+          longPressTimer = setTimeout(() => {
+            objects = objects.filter(o => o.id !== target.id);
+            selectedId = null;
+            pointerDownInfo = null;
+            rasterizeObstacles();
+          }, 550);
+        }
       }
     } else {
       selectedId = null;
@@ -955,7 +977,13 @@
   window.addEventListener('pointermove', (e) => {
     if (!pointerDownInfo) return;
     const p = getPointer(e);
-    
+
+    // 移动时取消长按
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+
     if (pointerDownInfo.action === 'drawNew') {
       const tw = p.x - pointerDownInfo.startX;
       const th = p.y - pointerDownInfo.startY;
@@ -966,47 +994,98 @@
         h: Math.abs(th) 
       };
     } else if (pointerDownInfo.action === 'move') {
-      pointerDownInfo.obj.x = p.x - pointerDownInfo.offX;
-      pointerDownInfo.obj.y = p.y - pointerDownInfo.offY;
+      const o = pointerDownInfo.obj;
+      o.x = clampi(p.x - pointerDownInfo.offX, 0, 1 - o.w);
+      o.y = clampi(p.y - pointerDownInfo.offY, 0, 1 - o.h);
       rasterizeObstacles();
     } else if (pointerDownInfo.action === 'resize') {
       const o = pointerDownInfo.obj;
-      // 利用固定 AABB 原點（左上角）來防止旋轉縮放時座標亂跳
-      const newAabbW = Math.max(0.02, p.x - pointerDownInfo.aabbX);
-      const newAabbH = Math.max(0.02, p.y - pointerDownInfo.aabbY);
+      const newAabbW = Math.max(0.04, p.x - pointerDownInfo.aabbX);
+      const newAabbH = Math.max(0.04, p.y - pointerDownInfo.aabbY);
+      const angle = (o.angle || 0) % 360;
 
-      if (o.angle === 90 || o.angle === 270) {
-          o.w = newAabbH;
-          o.h = newAabbW;
+      if (angle === 0 || angle === 180) {
+        o.w = newAabbW;
+        o.h = newAabbH;
+        o.x = pointerDownInfo.aabbX;
+        o.y = pointerDownInfo.aabbY;
       } else {
-          o.w = newAabbW;
-          o.h = newAabbH;
-      }
-      
-      if (o.angle === 0 || o.angle === 180) {
-          o.x = pointerDownInfo.aabbX;
-          o.y = pointerDownInfo.aabbY;
-      } else {
-          o.x = pointerDownInfo.aabbX - o.w/2 + o.h/2;
-          o.y = pointerDownInfo.aabbY - o.h/2 + o.w/2;
+        o.w = newAabbH;
+        o.h = newAabbW;
+        const cx = pointerDownInfo.aabbX + newAabbW / 2;
+        const cy = pointerDownInfo.aabbY + newAabbH / 2;
+        o.x = cx - o.w / 2;
+        o.y = cy - o.h / 2;
       }
       rasterizeObstacles();
     }
   });
 
-  window.addEventListener('pointerup', () => {
-    if (pointerDownInfo && pointerDownInfo.action === 'drawNew') {
-       if (pointerDownInfo.tempAABB.w > 0.01 && pointerDownInfo.tempAABB.h > 0.01) {
-         let shape = 'rect';
-         if (currentTool === 'wall-tri') shape = 'triangle';
-         if (currentTool === 'wall-circle') shape = 'circle';
-         const o = { id: nextId++, type: 'wall', shape: shape, angle: 0, ...pointerDownInfo.tempAABB };
-         objects.push(o);
-         selectedId = o.id;
-         rasterizeObstacles();
-       }
+  window.addEventListener('pointerup', (e) => {
+    if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+
+    // 双击旋转判定（抬起时判定，避免拖拽误触）
+    if (!pointerDownInfo || pointerDownInfo.action === 'drawNew') {
+      // 空白点击或绘制结束，不处理双击
+    } else {
+      const p = getPointer(e);
+      const target = hitTest(p.x, p.y);
+      if (target && !pointerDownInfo.moved) {
+        const now = performance.now();
+        if (now - lastTapTime < DOUBLE_TAP_DELAY && lastTapId === target.id) {
+          target.angle = ((target.angle || 0) + 90) % 360;
+          rasterizeObstacles();
+          lastTapTime = 0;
+          lastTapId = null;
+        } else {
+          lastTapTime = now;
+          lastTapId = target.id;
+        }
+      }
     }
+
+    // 绘制结束，创建墙体
+    if (pointerDownInfo && pointerDownInfo.action === 'drawNew') {
+      let { x, y, w, h } = pointerDownInfo.tempAABB;
+      // 尺寸过小则使用默认尺寸
+      if (w < 0.02 && h < 0.02) {
+        w = DEFAULT_WALL_W;
+        h = DEFAULT_WALL_H;
+        x = clampi(x - w/2, 0, 1 - w);
+        y = clampi(y - h/2, 0, 1 - h);
+      }
+      x = clampi(x, 0, 1 - w);
+      y = clampi(y, 0, 1 - h);
+
+      const o = {
+        id: nextId++,
+        type: 'wall',
+        shape: pointerDownInfo.shape,
+        angle: 0,
+        x: x, y: y, w: w, h: h
+      };
+      objects.push(o);
+      selectedId = o.id;
+      rasterizeObstacles();
+    }
+
     pointerDownInfo = null;
+  });
+
+  mainCanvas.addEventListener('pointercancel', () => {
+    pointerDownInfo = null;
+    if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+  });
+
+  mainCanvas.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    const p = getPointer(e);
+    const hit = hitTest(p.x, p.y);
+    if (hit) {
+      objects = objects.filter(o => o.id !== hit.id);
+      selectedId = null;
+      rasterizeObstacles();
+    }
   });
 
   // ===== UI 控制 =====
@@ -1037,7 +1116,7 @@
     const val = document.getElementById(id + 'Val');
     el.addEventListener('input', e => {
       let v = parseFloat(e.target.value);
-      if (id === 'diff' || id === 'visc') v *= 0.0001;
+      if (id === 'diff' || id === 'visc') v *= 0.001;
       params[id] = v;
       val.innerText = v.toFixed(id==='force'?1:4);
     });
@@ -1052,7 +1131,6 @@
   function mainLoop(now) {
     const dt = Math.min(0.04, (now - lastTime) / 1000);
     lastTime = now;
-
     if (!paused) {
       injectBlowers(dt);
       fluidStep(0.016);
@@ -1060,7 +1138,6 @@
     }
     
     render();
-
     // 计算 FPS
     fpsFrames++;
     if (now - fpsLastTime >= 1000) {
@@ -1074,19 +1151,48 @@
   // 绘制工具栏图标
   document.querySelectorAll('canvas[data-icon]').forEach(c => {
     const ctx = c.getContext('2d');
+    disableSmoothing(ctx);
+    ctx.clearRect(0, 0, 16, 16);
     ctx.fillStyle = '#eef1f7';
     const type = c.dataset.icon;
-    if(type==='select'){ ctx.beginPath(); ctx.moveTo(4,2); ctx.lineTo(12,8); ctx.lineTo(7,10); ctx.lineTo(4,14); ctx.fill(); }
-    if(type==='wall'){ ctx.fillRect(2,2,12,12); }
-    if(type==='wall-tri'){ ctx.beginPath(); ctx.moveTo(2,14); ctx.lineTo(14,14); ctx.lineTo(8,2); ctx.fill(); }
-    if(type==='wall-circle'){ ctx.beginPath(); ctx.arc(8,8,6,0,Math.PI*2); ctx.fill(); }
-    if(type==='blower'){ ctx.fillRect(2,4,10,8); ctx.fillStyle='#f2a65a'; ctx.fillRect(12,5,2,6); }
-    if(type==='delete'){ ctx.fillStyle='#e8637a'; ctx.beginPath(); ctx.moveTo(4,4); ctx.lineTo(12,12); ctx.moveTo(12,4); ctx.lineTo(4,12); ctx.strokeStyle='#e8637a'; ctx.lineWidth=3; ctx.stroke(); }
+    if(type==='select'){
+      ctx.beginPath();
+      ctx.moveTo(3,2); ctx.lineTo(13,9); ctx.lineTo(9,10); ctx.lineTo(11,14); ctx.lineTo(9,15); ctx.lineTo(7,11); ctx.lineTo(3,13);
+      ctx.closePath(); ctx.fill();
+    }
+    if(type==='wall'){
+      ctx.fillRect(1,3,7,4); ctx.fillRect(9,3,6,4);
+      ctx.fillRect(1,8,4,4); ctx.fillRect(6,8,9,4);
+      ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.strokeRect(1,3,14,9);
+    }
+    if(type==='wall-tri'){
+      ctx.beginPath(); ctx.moveTo(8,2); ctx.lineTo(14,13); ctx.lineTo(2,13); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.stroke();
+    }
+    if(type==='wall-circle'){
+      ctx.beginPath(); ctx.arc(8,8,6,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.stroke();
+    }
+    if(type==='blower'){
+      ctx.fillStyle = '#5ad1d6'; ctx.fillRect(2,2,12,12);
+      ctx.fillStyle = '#2b3142'; ctx.fillRect(4,4,8,8);
+      ctx.fillStyle = '#f2a65a'; ctx.fillRect(7,3,2,10); ctx.fillRect(3,7,10,2);
+    }
+    if(type==='delete'){
+      ctx.strokeStyle='#e8637a'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.moveTo(3,3); ctx.lineTo(13,13); ctx.moveTo(13,3); ctx.lineTo(3,13); ctx.stroke();
+    }
   });
 
   // 初始化
   window.addEventListener('resize', resizeCanvases);
   resizeCanvases();
+
+  // 初始场景
+  objects.push({ id: nextId++, type: 'blower', x: 0.05, y: 0.43, w: 0.14, h: 0.14, angle: 0 });
+  objects.push({ id: nextId++, type: 'wall', shape: 'rect', x: 0.45, y: 0.34, w: 0.06, h: 0.32, angle: 0 });
+  rasterizeObstacles();
+
   requestAnimationFrame(mainLoop);
 })();
 </script>
